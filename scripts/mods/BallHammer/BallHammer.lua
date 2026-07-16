@@ -1,6 +1,7 @@
 local mod = get_mod("BallHammer")
 local MarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerMarker")
 local HordeMarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerHordeMarker")
+local ActionInputParser = require("scripts/extension_systems/action_input/action_input_parser")
 local WeaponTemplate = require("scripts/utilities/weapon/weapon_template")
 
 local BREED_DATA = {
@@ -88,8 +89,6 @@ local max_distance      = 80
 local horde_distance    = 80
 local outline_distance  = 30
 local aimbot_held       = false
-local auto_shoot_pressed = false
-local synthetic_input_window = false
 local aim_distance      = 80
 local aim_fov           = 30
 local aim_smoothness    = 55
@@ -105,6 +104,9 @@ local companion_next_scan_t = 0
 local companion_waiting_for_damage = false
 local companion_wait_deadline_t = 0
 local companion_attackers = {}
+local auto_whistle_pending_target = nil
+local auto_whistle_used_target = nil
+local auto_whistle_input_window = false
 local next_smart_target_refresh_t = 0
 
 mod.get_unit_data         = function(unit) return unit_data_map[unit] end
@@ -609,6 +611,12 @@ local function update_companion_target(player_unit, origin, physics_world, t)
         companion_next_scan_t = 0
         table.clear(companion_attackers)
     end
+    if auto_whistle_pending_target and (not HEALTH_ALIVE or not HEALTH_ALIVE[auto_whistle_pending_target]) then
+        auto_whistle_pending_target = nil
+    end
+    if auto_whistle_used_target and (not HEALTH_ALIVE or not HEALTH_ALIVE[auto_whistle_used_target]) then
+        auto_whistle_used_target = nil
+    end
     if t < companion_next_scan_t then return end
     companion_next_scan_t = t + 0.35
 
@@ -684,15 +692,29 @@ local function update_companion_target(player_unit, origin, physics_world, t)
     companion_target = chosen
 end
 
+local function queue_auto_whistle(target_unit)
+    if target_unit == auto_whistle_used_target or target_unit == auto_whistle_pending_target then return end
+    local player = Managers.player and Managers.player:local_player(1)
+    local player_unit = player and player.player_unit
+    local ability = player_unit and ScriptUnit.has_extension(player_unit, "ability_system")
+    if ability and ability:get_current_grenade_ability_name() == "adamant_whistle"
+        and ability:can_use_ability("grenade_ability") then
+        auto_whistle_pending_target = target_unit
+    end
+end
+
 mod:hook_safe("AttackReportManager", "add_attack_result", function(
     self, damage_profile, attacked_unit, attacking_unit, attack_direction,
     hit_world_position, hit_weakspot, damage
 )
-    if companion_waiting_for_damage and damage and damage > 0
-        and attacked_unit == companion_target and companion_attackers[attacking_unit] then
-        companion_waiting_for_damage = false
-        companion_wait_deadline_t = 0
-        companion_next_scan_t = 0
+    if damage and damage > 0 and attacked_unit == companion_target
+        and companion_attackers[attacking_unit] then
+        queue_auto_whistle(attacked_unit)
+        if companion_waiting_for_damage then
+            companion_waiting_for_damage = false
+            companion_wait_deadline_t = 0
+            companion_next_scan_t = 0
+        end
     end
 end)
 
@@ -817,17 +839,21 @@ local function aim_at_position(player, first_person, target_position, dt, smooth
     player:set_orientation(yaw, pitch, 0)
 end
 
-local function update_auto_shoot(unit_data, first_person_extension, t)
-    local input_extension = first_person_extension._input_extension
-    if auto_shoot_pressed or not input_extension or not input_extension:get("action_one_hold") then return end
+local function repeat_semi_auto_input(parser, input_extension, inputs)
+    if not input_extension._is_local_unit or parser._action_component_name ~= "weapon_action"
+        or not inputs.action_one_hold
+        or inputs.action_one_pressed or not locked_target
+        or not HEALTH_ALIVE or not HEALTH_ALIVE[locked_target] then return end
 
-    local weapon_action = unit_data:read_component("weapon_action")
-    local weapon_template = weapon_action and WeaponTemplate.current_weapon_template(weapon_action)
+    local weapon_template = WeaponTemplate.current_weapon_template(parser._action_component)
     local action_inputs = weapon_template and weapon_template.action_inputs
-    if not action_inputs or not action_inputs.shoot_pressed then return end
+    if not action_inputs then return end
 
-    local action = input_extension:get("action_two_hold") and action_inputs.zoom_shoot
-        and "zoom_shoot" or "shoot_pressed"
+    local hip_action = action_inputs.shoot_pressed and "shoot_pressed"
+        or action_inputs.shoot and "shoot"
+    if not hip_action then return end
+    local action = inputs.action_two_hold and action_inputs.zoom_shoot
+        and "zoom_shoot" or hip_action
     local input_sequence = action_inputs[action] and action_inputs[action].input_sequence
     local press_driven = false
     for i = 1, input_sequence and #input_sequence or 0 do
@@ -839,33 +865,52 @@ local function update_auto_shoot(unit_data, first_person_extension, t)
     end
     if not press_driven then return end
 
-    local weapon_extension = first_person_extension._weapon_extension
+    local weapon_extension = parser._config_data.action_extension
+    local t = parser._last_fixed_frame * parser._fixed_time_step
     if weapon_extension and weapon_extension:action_input_is_currently_valid(
-        "weapon_action", action, nil, t
+        "weapon_action", action, "action_one_pressed", t
     ) then
-        auto_shoot_pressed = true
+        inputs.action_one_pressed = true
     end
 end
 
-mod:hook(CLASS.PlayerUnitInputExtension, "get", function(func, self, action, ...)
-    local physical_input = func(self, action, ...)
-    if synthetic_input_window and self._is_local_unit and
-       action == "action_one_pressed" and auto_shoot_pressed then
-        return true
-    end
-    return physical_input
+mod:hook(ActionInputParser, "_this_frames_inputs", function(func, self, input_extension)
+    local inputs = func(self, input_extension)
+    repeat_semi_auto_input(self, input_extension, inputs)
+    return inputs
 end)
 
-mod:hook(CLASS.PlayerUnitActionInputExtension, "fixed_update", function(func, self, unit, ...)
+mod:hook(CLASS.PlayerUnitInputExtension, "get", function(func, self, action, ...)
+    if auto_whistle_input_window and self._is_local_unit
+        and action == "grenade_ability_pressed" then return true end
+    return func(self, action, ...)
+end)
+
+mod:hook(CLASS.PlayerUnitActionInputExtension, "fixed_update", function(func, self, unit, dt, t, fixed_frame)
     local player = Managers.player and Managers.player:local_player(1)
-    if not player or unit ~= player.player_unit then
-        return func(self, unit, ...)
+    local target = auto_whistle_pending_target
+    if not player or unit ~= player.player_unit or not target then
+        return func(self, unit, dt, t, fixed_frame)
+    end
+    if not HEALTH_ALIVE or not HEALTH_ALIVE[target] then
+        auto_whistle_pending_target = nil
+        return func(self, unit, dt, t, fixed_frame)
     end
 
-    synthetic_input_window = true
-    func(self, unit, ...)
-    synthetic_input_window = false
-    auto_shoot_pressed = false
+    local ability = ScriptUnit.has_extension(unit, "ability_system")
+    local can_whistle = ability and ability:get_current_grenade_ability_name() == "adamant_whistle"
+        and ability:can_use_ability("grenade_ability")
+        and ability:action_input_is_currently_valid(
+            "grenade_ability_action", "aim_pressed", "grenade_ability_pressed", t
+        )
+    if not can_whistle then return func(self, unit, dt, t, fixed_frame) end
+
+    auto_whistle_input_window = true
+    local ok, err = pcall(func, self, unit, dt, t, fixed_frame)
+    auto_whistle_input_window = false
+    if not ok then error(err) end
+    auto_whistle_pending_target = nil
+    auto_whistle_used_target = target
 end)
 
 mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, unit, dt, t, frame)
@@ -873,7 +918,6 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
 
     local player = Managers.player and Managers.player:local_player(1)
     if not player or unit ~= player.player_unit or not player:unit_is_alive() then
-        auto_shoot_pressed = false
         clear_aim_lock()
         return
     end
@@ -889,7 +933,6 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     update_companion_target(unit, visibility_origin, physics_world, t)
 
     if not activation_is_held(aim_activation, aimbot_held, self._input_extension) then
-        auto_shoot_pressed = false
         clear_aim_lock()
         return
     end
@@ -912,13 +955,9 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         physics_world, visibility_origin, camera_forward,
         aim_distance, aim_fov, dt, preferred_target
     )
-    if not target_position then
-        auto_shoot_pressed = false
-        return
-    end
+    if not target_position then return end
 
     aim_at_position(player, first_person, target_position, dt, aim_smoothness)
-    update_auto_shoot(unit_data, self, t)
 end)
 
 mod:hook(CLASS.MinionSpawnManager, "spawn_minion", function(func, self, ...)
