@@ -1,6 +1,7 @@
 local mod = get_mod("BallHammer")
 local MarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerMarker")
 local HordeMarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerHordeMarker")
+local WeaponTemplate = require("scripts/utilities/weapon/weapon_template")
 
 local BREED_DATA = {
     chaos_hound                 = { name = "Hound",           color = { 255, 255, 61,  61  }, outline_color = { 1,   0.24, 0.24 }, slot = "special_target" },
@@ -74,7 +75,9 @@ local outline_distance  = 30
 local aimbot_held       = false
 local triggerbot_held    = false
 local rage_held          = false
-local auto_fire          = false
+local auto_fire_request_id = nil
+local auto_fire_active   = false
+local auto_fire_release_action = nil
 local aim_distance      = 80
 local aim_fov           = 30
 local aim_smoothness    = 55
@@ -549,15 +552,7 @@ local function native_vector(position)
     return Vector3(x, y, z)
 end
 
-local function aim_position(unit)
-    local nodes = AIM_NODES[aim_location] or AIM_NODES.head
-    for i = 1, #nodes do
-        local node_name = nodes[i]
-        if Unit.has_node(unit, node_name) then
-            return native_vector(Unit.world_position(unit, Unit.node(unit, node_name)))
-        end
-    end
-
+local function fallback_aim_position(unit)
     local body = native_vector(Unit.world_position(unit, 1))
     if not body then return nil end
     local unit_data = ScriptUnit.has_extension(unit, "unit_data_system")
@@ -580,27 +575,51 @@ end
 
 local function target_metrics(physics_world, player_unit, target_unit, origin, camera_forward, mode, distance_limit, fov, on_screen)
     if not HEALTH_ALIVE or not HEALTH_ALIVE[target_unit] then return nil end
-    local position = aim_position(target_unit)
-    if not position then return nil end
+    local first_position, first_score
 
-    local offset = position - origin
-    local distance = Vector3.length(offset)
-    if distance <= 0 or distance > distance_limit then return nil end
+    local function evaluate(position)
+        if not position then return nil end
+        local offset = position - origin
+        local distance = Vector3.length(offset)
+        if distance <= 0 or distance > distance_limit then return nil end
 
-    local direction = Vector3.normalize(offset)
-    local dot = Vector3.dot(camera_forward, direction)
-    if mode == "rage" then
-        if not on_screen(position) then return nil end
-    elseif dot < math.cos(math.rad(fov * 0.5)) then
-        return nil
+        local direction = Vector3.normalize(offset)
+        local dot = Vector3.dot(camera_forward, direction)
+        if mode == "rage" then
+            if not on_screen(position) then return nil end
+        elseif dot < math.cos(math.rad(fov)) then
+            return nil
+        end
+
+        local range_score = 1 - distance / distance_limit
+        local score = mode == "rage"
+            and danger_score(target_unit) * 0.5 + math.max(dot, 0) * 0.3 + range_score * 0.2
+            or dot + range_score * 0.001
+        if not first_position then
+            first_position, first_score = position, score
+        end
+        if has_line_of_sight(physics_world, player_unit, target_unit, origin, direction, distance) then
+            return position, score, true
+        end
     end
 
-    local visible = has_line_of_sight(physics_world, player_unit, target_unit, origin, direction, distance)
-    local range_score = 1 - distance / distance_limit
-    local score = mode == "rage"
-        and danger_score(target_unit) * 0.5 + math.max(dot, 0) * 0.3 + range_score * 0.2
-        or dot + range_score * 0.001
-    return position, score, visible
+    local nodes = AIM_NODES[aim_location] or AIM_NODES.head
+    local found_node = false
+    for i = 1, #nodes do
+        local node_name = nodes[i]
+        if Unit.has_node(target_unit, node_name) then
+            found_node = true
+            local position, score, visible = evaluate(native_vector(
+                Unit.world_position(target_unit, Unit.node(target_unit, node_name))
+            ))
+            if visible then return position, score, true end
+        end
+    end
+    if not found_node then
+        local position, score, visible = evaluate(fallback_aim_position(target_unit))
+        if visible then return position, score, true end
+    end
+    return first_position, first_score, false
 end
 
 local function clear_aim_lock()
@@ -682,18 +701,63 @@ local function aim_at_position(player, first_person, target_position, dt, smooth
     return math.deg(math.sqrt(yaw_delta * yaw_delta + pitch_delta * pitch_delta))
 end
 
-mod:hook(CLASS.PlayerUnitInputExtension, "get", function(func, self, action, ...)
-    if auto_fire and self._is_local_unit and (action == "action_one_pressed" or action == "action_one_hold") then
-        return true
+local function queue_auto_fire(unit, unit_data, first_person_extension, t)
+    local action_input = ScriptUnit.has_extension(unit, "action_input_system")
+    if not action_input then return end
+    if auto_fire_request_id and not action_input:bot_queue_request_is_consumed(
+        "weapon_action", auto_fire_request_id
+    ) then
+        return
     end
-    return func(self, action, ...)
-end)
+    auto_fire_request_id = nil
+
+    local weapon_action = unit_data:read_component("weapon_action")
+    local weapon_template = weapon_action and WeaponTemplate.current_weapon_template(weapon_action)
+    local action_inputs = weapon_template and weapon_template.action_inputs
+    if not action_inputs then return end
+
+    local input_extension = first_person_extension._input_extension
+    local zoomed = input_extension and input_extension:get("action_two_hold")
+    local action = zoomed and action_inputs.zoom_shoot and "zoom_shoot"
+        or action_inputs.shoot_pressed and "shoot_pressed"
+        or action_inputs.shoot and "shoot"
+    local weapon_extension = first_person_extension._weapon_extension
+    if not action or not weapon_extension or not weapon_extension:action_input_is_currently_valid(
+        "weapon_action", action, nil, t
+    ) then
+        return
+    end
+
+    auto_fire_request_id = action_input:bot_queue_action_input("weapon_action", action)
+    auto_fire_active = true
+    auto_fire_release_action = nil
+    local input_sequence = action_inputs[action] and action_inputs[action].input_sequence or {}
+    for i = 1, #input_sequence do
+        local input = input_sequence[i]
+        if input.input == "action_one_hold" and input.value == true and action_inputs.shoot_release then
+            auto_fire_release_action = "shoot_release"
+            break
+        end
+    end
+end
+
+local function stop_auto_fire(unit)
+    if not auto_fire_active then return end
+    local action_input = ScriptUnit.has_extension(unit, "action_input_system")
+    if action_input and auto_fire_release_action then
+        auto_fire_request_id = action_input:bot_queue_action_input(
+            "weapon_action", auto_fire_release_action
+        )
+    else
+        auto_fire_request_id = nil
+    end
+    auto_fire_active = false
+    auto_fire_release_action = nil
+end
 
 mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, unit, dt, t, frame)
     if not dt or dt <= 0 then return end
 
-    -- Generated fire must not satisfy the aimbot's left-mouse activation check.
-    auto_fire = false
     local mode
     if rage_held then
         mode = "rage"
@@ -703,13 +767,14 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         mode = "aim"
     end
     if not mode then
+        stop_auto_fire(unit)
         clear_aim_lock()
         return
     end
 
     local player = Managers.player and Managers.player:local_player(1)
     if not player or unit ~= player.player_unit or not player:unit_is_alive() then
-        auto_fire = false
+        stop_auto_fire(unit)
         clear_aim_lock()
         return
     end
@@ -730,7 +795,7 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         mode, distance_limit, fov, on_screen, dt, t
     )
     if not target_position then
-        auto_fire = false
+        stop_auto_fire(unit)
         return
     end
 
@@ -738,8 +803,18 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         or mode == "trigger" and trigger_smoothness
         or aim_smoothness
     local error = aim_at_position(player, first_person, target_position, dt, smoothness)
-    auto_fire = visible and (mode == "rage" and error <= 1.5
-        or mode == "trigger" and error <= trigger_fire_fov)
+    if visible and (mode == "rage" and error <= 1.5
+        or mode == "trigger" and error <= trigger_fire_fov) then
+        queue_auto_fire(unit, unit_data, self, t)
+    else
+        stop_auto_fire(unit)
+    end
+end)
+
+mod:hook(CLASS.MinionSpawnManager, "spawn_minion", function(func, self, ...)
+    local unit = func(self, ...)
+    add_esp_for_unit(unit)
+    return unit
 end)
 
 mod:hook_safe("HealthExtension", "init", function(self, extension_init_context, unit)

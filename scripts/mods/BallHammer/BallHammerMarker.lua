@@ -9,7 +9,7 @@ local TEXT = { 255, 224, 224, 229 }
 template.name = "ballhammer_marker"
 template.unit_node = "root_point"
 template.size = { 1, 1 }
-template.check_line_of_sight = false
+template.check_line_of_sight = true
 template.max_distance = 999
 template.screen_clamp = false
 
@@ -43,6 +43,8 @@ template.create_widget_defintion = function(_, scenegraph_id)
         { pass_type = "rect", style_id = "bottom", style = line_style() },
         { pass_type = "rect", style_id = "left", style = line_style() },
         { pass_type = "rect", style_id = "right", style = line_style() },
+        { pass_type = "rect", style_id = "health_bg", style = line_style() },
+        { pass_type = "rect", style_id = "health_fill", style = line_style() },
         {
             pass_type = "text",
             style_id = "name_shadow",
@@ -85,22 +87,31 @@ local function name_for(data, distance)
     return data.name .. (distance and " " .. distance .. "m" or "")
 end
 
-local function apply_distance_alpha(widget, data, distance)
+local function apply_distance_alpha(widget, data, distance, visible)
     local max_distance = mod.get_max_distance()
     local fade_start = max_distance * 0.6
     local fade = distance <= fade_start and 1 or math.max(0, (max_distance - distance) / (max_distance - fade_start))
     local alpha = math.floor(data.color[1] * fade + 0.5)
+    local red, green, blue = visible and 255 or data.color[2],
+        visible and 255 or data.color[3], visible and 255 or data.color[4]
     for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
-        widget.style[style_id].color[1] = alpha
+        local color = widget.style[style_id].color
+        color[1], color[2], color[3], color[4] = alpha, red, green, blue
     end
-    widget.style.name.text_color[1] = alpha
-    widget.style.flag.text_color[1] = alpha
+    local name_color = widget.style.name.text_color
+    local flag_color = widget.style.flag.text_color
+    name_color[1], name_color[2], name_color[3], name_color[4] = alpha, red, green, blue
+    flag_color[1], flag_color[2], flag_color[3], flag_color[4] = alpha, red, green, blue
     local shadow_alpha = math.floor(alpha * 180 / 255 + 0.5)
     widget.style.name_shadow.text_color[1] = shadow_alpha
     widget.style.flag_shadow.text_color[1] = shadow_alpha
+    widget.style.health_bg.color[1] = math.floor(180 * fade + 0.5)
+    widget.style.health_bg.color[2], widget.style.health_bg.color[3], widget.style.health_bg.color[4] = 0, 0, 0
+    widget.style.health_fill.color[1] = alpha
+    widget.style.health_fill.color[2], widget.style.health_fill.color[3], widget.style.health_fill.color[4] = 80, 220, 100
 end
 
-local function update_box(parent, ui_renderer, widget, marker, body)
+local function update_box(parent, ui_renderer, widget, marker, body, health_fraction)
     if not marker.base_height then
         local unit_data = ScriptUnit.has_extension(marker.unit, "unit_data_system")
         local breed = unit_data and unit_data:breed()
@@ -123,6 +134,10 @@ local function update_box(parent, ui_renderer, widget, marker, body)
     set_line(widget.style.bottom, center_x, bottom, right - left, 1)
     set_line(widget.style.left, left, (top + bottom) * 0.5, 1, bottom - top)
     set_line(widget.style.right, right, (top + bottom) * 0.5, 1, bottom - top)
+    local box_width = right - left
+    local fill_width = box_width * health_fraction
+    set_line(widget.style.health_bg, center_x, bottom + 5, box_width, 3)
+    set_line(widget.style.health_fill, left + fill_width * 0.5, bottom + 5, fill_width, 3)
     local name_x, name_y = center_x, top - 16
     local flag_x = right + 4 + widget.style.flag.size[1] * 0.5
     local flag_y = top + widget.style.flag.size[2] * 0.5
@@ -168,12 +183,17 @@ template.update_function = function(parent, ui_renderer, widget, marker)
         widget.visible = false
         return
     end
-    if not update_box(parent, ui_renderer, widget, marker, body) then
+    local health_extension = ScriptUnit.has_extension(marker.unit, "health_system")
+    local health_fraction = health_extension and math.clamp(health_extension:current_health_percent(), 0, 1) or 0
+    if not update_box(parent, ui_renderer, widget, marker, body, health_fraction) then
         widget.visible = false
         return
     end
     local data = marker.data or mod.get_unit_data(marker.unit)
-    if data then apply_distance_alpha(widget, data, distance) end
+    if data then
+        apply_distance_alpha(widget, data, distance,
+            marker.raycast_initialized and marker.raycast_result == false)
+    end
 
     local floor_distance = math.floor(distance)
     if floor_distance ~= marker.last_dist then

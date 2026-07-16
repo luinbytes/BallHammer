@@ -124,6 +124,9 @@ local recoil_api = {
 package.preload["scripts/utilities/recoil"] = function()
     return recoil_api
 end
+package.preload["scripts/utilities/weapon/weapon_template"] = function()
+    return { current_weapon_template = function(component) return component.template end }
+end
 local mod = {
     get = function(_, key) return settings[key] end,
     io_dofile = function(_, path)
@@ -144,6 +147,9 @@ local mod = {
 
 get_mod = function() return mod end
 CLASS = {
+    MinionSpawnManager = {
+        spawn_minion = function(_, unit) return unit end,
+    },
     OutlineSystem = {},
     PlayerUnitInputExtension = { get = function() return false end },
     PlayerUnitWeaponSpreadExtension = {
@@ -199,13 +205,35 @@ Managers = {
 
 local units = {}
 local camera_rotation = Vector3(0, 1, 0)
+local queued_weapon_actions = {}
+local action_input_extension = {
+    bot_queue_action_input = function(_, component, action)
+        queued_weapon_actions[#queued_weapon_actions + 1] = { component = component, action = action }
+        return #queued_weapon_actions
+    end,
+    bot_queue_request_is_consumed = function() return true end,
+}
 ScriptUnit = {
-    has_extension = function(unit)
+    has_extension = function(unit, system)
         if unit == player_unit then
+            if system == "action_input_system" then return action_input_extension end
             return {
                 read_component = function(_, name)
                     if name == "first_person" then
                         return { position = Vector3(0, 0, 0), rotation = camera_rotation }
+                    end
+                    if name == "weapon_action" then
+                        return { template = { action_inputs = {
+                            shoot_pressed = {
+                                input_sequence = { { input = "action_one_pressed", value = true } },
+                            },
+                            zoom_shoot = {
+                                input_sequence = { { input = "action_one_hold", value = true } },
+                            },
+                            shoot_release = {
+                                input_sequence = { { input = "action_one_hold", value = false } },
+                            },
+                        } } }
                     end
                     return { yaw_offset = 0, pitch_offset = 0, offset_x = 0, offset_y = 0 }
                 end,
@@ -382,6 +410,24 @@ end
 assert(respawn_marker_found, "a respawned enemy should replace its stale removed marker")
 HEALTH_ALIVE[shotgunner_unit] = false
 
+local training_respawn = {}
+units[training_respawn] = {
+    breed_data = {
+        name = "renegade_sniper",
+        base_height = 1.8,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(5, 20, 0),
+}
+HEALTH_ALIVE[training_respawn] = true
+table.clear(marker_events)
+assert(CLASS.MinionSpawnManager.spawn_minion({}, training_respawn) == training_respawn,
+    "spawn hook should preserve Darktide's returned minion unit")
+assert(marker_events[1] and marker_events[1].unit == training_respawn,
+    "a newly spawned training-range replacement should receive ESP immediately")
+HEALTH_ALIVE[training_respawn] = false
+
 mod.toggle_esp()
 
 local blocked_best = {}
@@ -406,7 +452,10 @@ held_action = "action_two_hold"
 
 local first_person_extension = {
     _world = gameplay_world,
-    _weapon_extension = { recoil_template = function() return {} end },
+    _weapon_extension = {
+        recoil_template = function() return {} end,
+        action_input_is_currently_valid = function() return true end,
+    },
     _recoil_component = { pitch_offset = 0, yaw_offset = 0 },
     _movement_state_component = {},
     _locomotion_component = {},
@@ -450,6 +499,33 @@ assert(corrected_error < wrapped_error,
     "aim should take the shortest pitch path across Darktide's wrapped orientation")
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.5)
+local fallback_bone_target = {}
+units[fallback_bone_target] = {
+    breed = "renegade_sniper",
+    position = Vector3(2, 10, 1),
+    nodes = {
+        j_head = Vector3(1, 10, 1.8),
+        j_spine = Vector3(2, 10, 1),
+    },
+}
+HEALTH_ALIVE[fallback_bone_target] = true
+hooks["HealthExtension.init"](nil, nil, fallback_bone_target)
+settings.aim_smoothness = 0
+mod.on_setting_changed("aim_smoothness")
+camera_rotation = Vector3.normalize(Vector3(2, 10, 1))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.6)
+local fallback_yaw = math.atan2(10, 2) - math.pi * 0.5
+local fallback_alpha = 1 - math.exp(-(2 + 100 * 0.22) * 0.1)
+assert(math.abs(orientation.yaw - fallback_yaw * fallback_alpha) < 0.0001,
+    "aim visibility should fall back from an occluded head to a visible configured bone")
+HEALTH_ALIVE[fallback_bone_target] = false
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.7)
+
 local lock_left, lock_right = {}, {}
 units[lock_left] = { breed = "renegade_sniper", position = Vector3(4, 20, 0), mixed_vector = true }
 units[lock_right] = { breed = "renegade_sniper", position = Vector3(6, 20, 0) }
@@ -460,6 +536,7 @@ settings.aim_smoothness = 0
 mod.on_setting_changed("aim_smoothness")
 orientation.yaw, orientation.pitch = 0, 0
 camera_rotation = Vector3.normalize(Vector3(4, 20, 0))
+held_action = "action_two_hold"
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 4)
 assert(orientation.yaw < 0, "initial acquisition should select the target nearest the crosshair")
 last_constructed._valid = false
@@ -487,12 +564,13 @@ mod.triggerbot_held(true)
 camera_rotation = Vector3.normalize(Vector3(4, 20, 0))
 orientation.yaw, orientation.pitch = left_yaw, 0
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.6, 6)
-assert(CLASS.PlayerUnitInputExtension.get({ _is_local_unit = true }, "action_one_pressed"),
-    "magnet triggerbot should press fire once its smoothed aim reaches the target")
+assert(queued_weapon_actions[1] and queued_weapon_actions[1].component == "weapon_action" and
+    queued_weapon_actions[1].action == "zoom_shoot",
+    "magnet triggerbot should queue a valid Darktide weapon action")
 mod.triggerbot_held(false)
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.7, 7)
-assert(not CLASS.PlayerUnitInputExtension.get({ _is_local_unit = true }, "action_one_pressed"),
-    "magnet triggerbot should release fire with its activation key")
+assert(queued_weapon_actions[2] and queued_weapon_actions[2].action == "shoot_release",
+    "magnet triggerbot should release a held Darktide fire action with its activation key")
 
 settings.trigger_activation = "off"
 settings.aim_activation = "both_mouse"
@@ -534,6 +612,7 @@ mod.on_setting_changed("aim_fov")
 mod.on_setting_changed("rage_smoothness")
 held_action = nil
 mod.rage_held(true)
+table.clear(queued_weapon_actions)
 camera_rotation = Vector3(0, 1, 0)
 orientation.yaw, orientation.pitch = 0, 0
 for frame = 11, 15 do
@@ -541,8 +620,8 @@ for frame = 11, 15 do
 end
 assert(orientation.yaw < -0.22,
     "rage should prefer the dangerous on-screen special even outside the configured aim FOV")
-assert(CLASS.PlayerUnitInputExtension.get({ _is_local_unit = true }, "action_one_hold"),
-    "rage should fire after converging on its weighted target")
+assert(queued_weapon_actions[1] and queued_weapon_actions[1].action == "shoot_pressed",
+    "rage should fire through Darktide's weapon-action queue after converging")
 mod.rage_held(false)
 settings.aim_activation = "left_mouse"
 mod.on_setting_changed("aim_activation")
@@ -550,8 +629,8 @@ local released_yaw = orientation.yaw
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.6, 16)
 assert(orientation.yaw == released_yaw,
     "generated rage fire should not feed back into left-mouse aimbot activation")
-assert(not CLASS.PlayerUnitInputExtension.get({ _is_local_unit = true }, "action_one_hold"),
-    "rage should release fire with its held key")
+local rage_actions = #queued_weapon_actions
+assert(rage_actions > 0, "rage should have queued at least one valid weapon action")
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 held_action = "action_one_hold"
 local no_target_ok, no_target_error = pcall(

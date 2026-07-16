@@ -11,7 +11,7 @@ local OFFSCREEN_BUFFER = 48
 template.name = "ballhammer_horde_marker"
 template.unit_node = "root_point"
 template.size = { 1, 1 }
-template.check_line_of_sight = false
+template.check_line_of_sight = true
 template.max_distance = 999
 template.screen_clamp = false
 
@@ -197,16 +197,21 @@ local function set_line(style, x, y, width, height)
     style.size[2] = height
 end
 
-local function apply_distance_alpha(widget, data, distance)
+local function apply_distance_alpha(widget, data, distance, visible)
     local max_distance = mod.get_horde_distance()
     local fade_start = max_distance * 0.6
     local fade = distance <= fade_start and 1 or math.max(0, (max_distance - distance) / (max_distance - fade_start))
     local alpha = math.floor(data.color[1] * fade + 0.5)
+    local red, green, blue = visible and 255 or data.color[2],
+        visible and 255 or data.color[3], visible and 255 or data.color[4]
     for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
-        widget.style[style_id].color[1] = alpha
+        local color = widget.style[style_id].color
+        color[1], color[2], color[3], color[4] = alpha, red, green, blue
     end
-    widget.style.dot.color[1] = alpha
-    widget.style.label.text_color[1] = alpha
+    local dot_color = widget.style.dot.color
+    local label_color = widget.style.label.text_color
+    dot_color[1], dot_color[2], dot_color[3], dot_color[4] = alpha, red, green, blue
+    label_color[1], label_color[2], label_color[3], label_color[4] = alpha, red, green, blue
 end
 
 template.on_enter = function(widget, marker)
@@ -243,7 +248,10 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         return
     end
     local data = marker.data or mod.horde_unit_data[marker.unit]
-    if data then apply_distance_alpha(widget, data, widget.content.distance) end
+    if data then
+        apply_distance_alpha(widget, data, widget.content.distance,
+            marker.raycast_initialized and marker.raycast_result == false)
+    end
 
     widget.content.draw_box = box.draw_box
     widget.content.draw_dot = box.draw_dot
