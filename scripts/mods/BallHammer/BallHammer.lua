@@ -1,7 +1,6 @@
 local mod = get_mod("BallHammer")
 local MarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerMarker")
 local HordeMarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerHordeMarker")
-local ActionInputParser = require("scripts/extension_systems/action_input/action_input_parser")
 local WeaponTemplate = require("scripts/utilities/weapon/weapon_template")
 
 local BREED_DATA = {
@@ -874,7 +873,7 @@ local function repeat_semi_auto_input(parser, input_extension, inputs)
     end
 end
 
-mod:hook(ActionInputParser, "_this_frames_inputs", function(func, self, input_extension)
+mod:hook("ActionInputParser", "_this_frames_inputs", function(func, self, input_extension)
     local inputs = func(self, input_extension)
     repeat_semi_auto_input(self, input_extension, inputs)
     return inputs

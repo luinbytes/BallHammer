@@ -139,7 +139,7 @@ local ActionInputParser = {
     end,
 }
 package.preload["scripts/extension_systems/action_input/action_input_parser"] = function()
-    return ActionInputParser
+    error("action input parser must not be required during mod_script initialization")
 end
 local mod = {
     get = function(_, key) return settings[key] end,
@@ -152,6 +152,10 @@ local mod = {
         if type(object) == "string" then hooks[object .. "." .. method] = handler end
     end,
     hook = function(_, object, method, handler)
+        if type(object) == "string" then
+            hooks["delayed." .. object .. "." .. method] = handler
+            return
+        end
         local original = object[method]
         object[method] = function(...)
             return handler(original, ...)
@@ -372,6 +376,12 @@ PhysicsWorld = {
 }
 
 dofile("scripts/mods/BallHammer/BallHammer.lua")
+local delayed_parser_hook = hooks["delayed.ActionInputParser._this_frames_inputs"]
+assert(delayed_parser_hook, "the parser hook should be deferred until Darktide registers its class")
+local original_parser_inputs = ActionInputParser._this_frames_inputs
+ActionInputParser._this_frames_inputs = function(...)
+    return delayed_parser_hook(original_parser_inputs, ...)
+end
 assert(messages[#messages] == "Loaded! - By @luinbytes",
     "load banner should use the requested credit")
 
