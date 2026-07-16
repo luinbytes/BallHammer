@@ -26,4 +26,8 @@ return {
     aim_fov = { en = "Aim Field of View (degrees)" },
     aim_smoothness = { en = "Aim Smoothness" },
     aim_curve = { en = "Aim Curve" },
+
+    companion_settings = { en = "Companion" },
+    enable_companion_target = { en = "Auto-Target Specials" },
+    companion_distance = { en = "Auto-Target Distance (m)" },
 }

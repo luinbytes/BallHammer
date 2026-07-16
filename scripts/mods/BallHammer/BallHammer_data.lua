@@ -121,6 +121,24 @@ return {
                     },
                 },
             },
+            {
+                setting_id = "companion_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "enable_companion_target",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                    {
+                        setting_id = "companion_distance",
+                        type = "numeric",
+                        default_value = 60,
+                        range = { 10, 120 },
+                        decimals_number = 0,
+                    },
+                },
+            },
         },
     },
 }

@@ -101,6 +101,8 @@ local settings = {
     aim_curve = 20,
     aim_location = "head",
     aim_activation = "left_mouse",
+    enable_companion_target = false,
+    companion_distance = 60,
 }
 local messages = {}
 local hooks = {}
@@ -166,6 +168,7 @@ ALIVE = { [player_unit] = true }
 local orientation = { yaw = 0, pitch = 0 }
 local player = {
     player_unit = player_unit,
+    viewport_name = "player_1",
     unit_is_alive = function() return true end,
     get_orientation = function() return orientation end,
     set_orientation = function(_, yaw, pitch, roll)
@@ -175,6 +178,12 @@ local player = {
 local marker_events = {}
 local held_action = "action_one_hold"
 local preexisting_units = {}
+local smart_direct_target
+local smart_target_updates = 0
+local companion_can_order = false
+local companion_orders = {}
+local companion_unit = {}
+local hud_camera_position = Vector3(0, 0, 0)
 local weapon_action_inputs = {
     shoot_pressed = {
         input_sequence = { { input = "action_one_pressed", value = true } },
@@ -192,10 +201,29 @@ Managers = {
         end,
     },
     state = {
+        camera = {
+            camera = function(_, viewport_name)
+                assert(viewport_name == "player_1")
+                return { position = hud_camera_position }
+            end,
+        },
         extension = {
             get_entities = function(_, name)
                 assert(name == "MinionUnitDataExtension")
                 return preexisting_units
+            end,
+            system = function(_, name)
+                if name == "smart_tag_system" then
+                    return {
+                        set_contextual_unit_tag = function(_, tagger, target, alternate)
+                            companion_orders[#companion_orders + 1] = {
+                                tagger = tagger,
+                                target = target,
+                                alternate = alternate,
+                            }
+                        end,
+                    }
+                end
             end,
         },
     },
@@ -216,6 +244,22 @@ local camera_rotation = Vector3(0, 1, 0)
 ScriptUnit = {
     has_extension = function(unit, system)
         if unit == player_unit then
+            if system == "companion_spawner_system" then
+                return companion_can_order and {
+                    companion_can_tag_order = function() return true end,
+                    companion_units = function() return { companion_unit } end,
+                } or nil
+            end
+            if system == "smart_targeting_system" then
+                return {
+                    force_update_smart_tag_targets = function()
+                        smart_target_updates = smart_target_updates + 1
+                    end,
+                    smart_tag_targeting_data = function()
+                        return { unit = smart_direct_target }
+                    end,
+                }
+            end
             return {
                 read_component = function(_, name)
                     if name == "first_person" then
@@ -226,6 +270,11 @@ ScriptUnit = {
                     end
                     return { yaw_offset = 0, pitch_offset = 0, offset_x = 0, offset_y = 0 }
                 end,
+            }
+        end
+        if system == "health_system" then
+            return {
+                current_health_percent = function() return units[unit].health or 1 end,
             }
         end
         return {
@@ -257,6 +306,7 @@ Unit = {
     end,
 }
 Quaternion = { forward = function(rotation) return rotation end }
+Camera = { local_position = function(camera) return camera.position end }
 local gameplay_world = {}
 local physics_world = {}
 Application = { main_world = function() return {} end }
@@ -268,19 +318,18 @@ World = {
 }
 Actor = { unit = function(actor) return actor.unit end }
 PhysicsWorld = {
-    raycast = function(world, _, direction)
+    raycast = function(world, origin, direction, _, cast_type, filter_key, filter_name)
         assert(world == physics_world, "raycast should use the gameplay physics world")
+        local ox, oy, oz = Vector3.to_elements(origin)
+        local cx, cy, cz = Vector3.to_elements(hud_camera_position)
+        assert(ox == cx and oy == cy and oz == cz,
+            "aim and companion visibility should cast from the HUD camera")
+        assert(cast_type == "all" and filter_key == "collision_filter" and
+            filter_name == "filter_interactable_line_of_sight_marker_check",
+            "aim and companion visibility should use the same filter as ESP")
         local direction_x = Vector3.to_elements(direction)
         if direction_x < 0.15 then return { { false, false, false, {} } } end
-        local closest
-        for unit, data in pairs(units) do
-            if HEALTH_ALIVE[unit] then
-                local unit_direction = Vector3.normalize(data.position)
-                local unit_direction_x = Vector3.to_elements(unit_direction)
-                if math.abs(unit_direction_x - direction_x) < 0.001 then closest = unit end
-            end
-        end
-        return closest and { { false, false, false, { unit = closest } } } or nil
+        return nil
     end,
 }
 
@@ -389,6 +438,19 @@ HEALTH_ALIVE[shotgunner_unit] = true
 hooks["HealthExtension.init"](nil, nil, shotgunner_unit)
 assert(marker_events[6].data.name == "Shotgunner" and marker_events[6].data.flag == "SPECIAL",
     "shotgunners should always receive a visible boss tag")
+local live_priority_marker = { template = { unit_node = "j_head" } }
+local live_horde_marker = { template = { unit_node = "j_head" } }
+mod.marker_refs[priority_unit] = live_priority_marker
+mod.horde_marker_refs[horde_unit] = live_horde_marker
+settings.aim_location = "torso"
+mod.on_setting_changed("aim_location")
+assert(live_priority_marker.template.unit_node == "j_spine" and
+    live_horde_marker.template.unit_node == "j_spine",
+    "changing aim bone should update cloned templates on live ESP markers")
+settings.aim_location = "head"
+mod.on_setting_changed("aim_location")
+mod.marker_refs[priority_unit] = nil
+mod.horde_marker_refs[horde_unit] = nil
 table.clear(marker_events)
 mod.marker_refs[shotgunner_unit] = { remove = true }
 for frame = 181, 240 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
@@ -507,13 +569,69 @@ camera_rotation = Vector3.normalize(Vector3(2, 10, 1))
 orientation.yaw, orientation.pitch = 0, 0
 held_action = "action_two_hold"
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.6)
+assert(orientation.yaw == 0 and orientation.pitch == 0,
+    "aim should not bypass an occluded configured bone using a different body point")
+units[fallback_bone_target].nodes.j_head = nil
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.65)
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.66)
 local fallback_yaw = math.atan2(10, 2) - math.pi * 0.5
 local fallback_alpha = 1 - math.exp(-(2 + 100 * 0.22) * 0.1)
 assert(math.abs(orientation.yaw - fallback_yaw * fallback_alpha) < 0.0001,
-    "aim visibility should fall back from an occluded head to a visible configured bone")
+    "aim should use the next configured bone only when the primary bone is absent")
 HEALTH_ALIVE[fallback_bone_target] = false
 held_action = nil
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.7)
+
+local direct_pick, angular_pick = {}, {}
+units[direct_pick] = {
+    breed = "renegade_sniper",
+    position = Vector3(6, 20, 0),
+    nodes = { j_head = Vector3(10, 20, 1.8) },
+}
+units[angular_pick] = {
+    breed = "renegade_sniper",
+    position = Vector3(5, 20, 0),
+    nodes = { j_head = Vector3(5, 20, 1.8) },
+}
+HEALTH_ALIVE[direct_pick], HEALTH_ALIVE[angular_pick] = true, true
+hooks["HealthExtension.init"](nil, nil, direct_pick)
+hooks["HealthExtension.init"](nil, nil, angular_pick)
+smart_direct_target = direct_pick
+camera_rotation = Vector3.normalize(Vector3(5, 20, 1.8))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.8)
+local direct_yaw = math.atan2(20, 10) - math.pi * 0.5
+local angular_yaw = math.atan2(20, 5) - math.pi * 0.5
+assert(smart_target_updates > 0 and
+    math.abs(orientation.yaw - direct_yaw) < math.abs(orientation.yaw - angular_yaw),
+    "a game-confirmed crosshair hit should win initial aim acquisition")
+smart_direct_target = nil
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.9)
+HEALTH_ALIVE[direct_pick], HEALTH_ALIVE[angular_pick] = false, false
+
+local outside_fov = {}
+units[outside_fov] = {
+    breed = "renegade_sniper",
+    position = Vector3(30, 5, 0),
+    nodes = { j_head = Vector3(30, 5, 1.8) },
+}
+HEALTH_ALIVE[outside_fov], HEALTH_ALIVE[angular_pick] = true, true
+smart_direct_target = outside_fov
+camera_rotation = Vector3.normalize(Vector3(5, 20, 1.8))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.95)
+assert(math.abs(orientation.yaw - angular_yaw) < math.abs(orientation.yaw -
+    (math.atan2(5, 30) - math.pi * 0.5)),
+    "native smart targeting should not bypass BallHammer's configured aim FOV")
+smart_direct_target = nil
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.96)
+HEALTH_ALIVE[outside_fov], HEALTH_ALIVE[angular_pick] = false, false
 
 local lock_left, lock_right = {}, {}
 units[lock_left] = { breed = "renegade_sniper", position = Vector3(4, 20, 0), mixed_vector = true }
@@ -608,6 +726,76 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, pla
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 1.4, 14)
 assert(not parsed_fire_pressed,
     "holding mouse one should not inject presses for an automatic fire action")
+
+for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+local companion_hound, companion_gunner = {}, {}
+units[companion_hound] = {
+    breed_data = {
+        name = "chaos_hound",
+        base_height = 1.4,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(8, 20, 0),
+    health = 1,
+}
+units[companion_gunner] = {
+    breed_data = {
+        name = "cultist_gunner",
+        base_height = 1.8,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, elite = true },
+    },
+    position = Vector3(2, 5, 0),
+    health = 0.1,
+}
+HEALTH_ALIVE[companion_hound], HEALTH_ALIVE[companion_gunner] = true, true
+hooks["HealthExtension.init"](nil, nil, companion_hound)
+hooks["HealthExtension.init"](nil, nil, companion_gunner)
+settings.enable_companion_target = true
+settings.companion_distance = 60
+mod.on_setting_changed("enable_companion_target")
+mod.on_setting_changed("companion_distance")
+companion_can_order = true
+held_action = nil
+local companion_yaw, companion_pitch = orientation.yaw, orientation.pitch
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 2.0, 20)
+assert(companion_orders[1] and companion_orders[1].tagger == player_unit and
+    companion_orders[1].target == companion_gunner and companion_orders[1].alternate == "companion_order",
+    "companion auto-target should issue the native order for the highest weighted special")
+assert(orientation.yaw == companion_yaw and orientation.pitch == companion_pitch,
+    "companion targeting must not move the player's aim")
+units[companion_hound].position = Vector3(1, 2, 0)
+units[companion_hound].health = 0
+units[companion_gunner].position = Vector3(2, 70, 0)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 2.4, 24)
+assert(#companion_orders == 1,
+    "temporary range or visibility loss should not bypass the companion damage gate")
+hooks["AttackReportManager.add_attack_result"](
+    {}, {}, companion_gunner, {}, {}, nil, false, 10
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 2.8, 28)
+assert(#companion_orders == 1,
+    "damage from someone other than the local companion must not unlock retargeting")
+hooks["AttackReportManager.add_attack_result"](
+    {}, {}, companion_gunner, companion_unit, {}, nil, false, 10
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 3.2, 32)
+assert(companion_orders[2] and companion_orders[2].target == companion_hound,
+    "companion damage should unlock a switch to a more dangerous target")
+units[companion_hound].position = Vector3(8, 50, 0)
+units[companion_hound].health = 1
+units[companion_gunner].position = Vector3(2, 5, 0)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 3.6, 36)
+assert(#companion_orders == 2,
+    "a fresh companion order should remain damage-gated during its travel window")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 6.21, 62)
+assert(companion_orders[3] and companion_orders[3].target == companion_gunner,
+    "a rejected companion order should eventually release its distance-based wait")
+HEALTH_ALIVE[companion_gunner] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 6.22, 63)
+assert(companion_orders[4] and companion_orders[4].target == companion_hound,
+    "a dead commanded target should unlock an immediate replacement")
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 held_action = "action_one_hold"

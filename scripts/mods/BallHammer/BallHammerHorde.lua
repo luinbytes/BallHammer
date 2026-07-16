@@ -1,21 +1,25 @@
 local horde = {}
 
-local MAX_WORLD_DISTANCE = 4.5
-local MAX_WORLD_DIAMETER = 6
-local INFECTED_WORLD_DISTANCE = 7
+local MAX_HORIZONTAL_DISTANCE = 3.5
+local MAX_VERTICAL_DISTANCE = 1.5
+local MAX_HORIZONTAL_DIAMETER = 5
+local MAX_VERTICAL_DIAMETER = 2
+local INFECTED_HORIZONTAL_DISTANCE = 4
 
-local function distance_squared(a, b)
+local function close_in_world(a, b, horizontal_distance, vertical_distance)
     local x = a.x - b.x
     local y = a.y - b.y
     local z = a.z - b.z
-    return x * x + y * y + z * z
+    return x * x + y * y <= horizontal_distance * horizontal_distance
+        and math.abs(z) <= vertical_distance
 end
 
 local function world_close_to_group(cluster, candidate)
-    local max_distance = candidate.force_horde_merge and INFECTED_WORLD_DISTANCE or MAX_WORLD_DISTANCE
-    local max_squared = max_distance * max_distance
+    local horizontal_distance = candidate.force_horde_merge
+        and INFECTED_HORIZONTAL_DISTANCE or MAX_HORIZONTAL_DISTANCE
     for i = 1, #cluster.members do
-        if distance_squared(cluster.members[i].world, candidate.world) <= max_squared then
+        if close_in_world(cluster.members[i].world, candidate.world,
+            horizontal_distance, MAX_VERTICAL_DISTANCE) then
             return true
         end
     end
@@ -23,9 +27,9 @@ local function world_close_to_group(cluster, candidate)
 end
 
 local function compact_after_add(cluster, candidate)
-    local max_diameter_squared = MAX_WORLD_DIAMETER * MAX_WORLD_DIAMETER
     for i = 1, #cluster.members do
-        if distance_squared(cluster.members[i].world, candidate.world) > max_diameter_squared then
+        if not close_in_world(cluster.members[i].world, candidate.world,
+            MAX_HORIZONTAL_DIAMETER, MAX_VERTICAL_DIAMETER) then
             return false
         end
     end
@@ -75,8 +79,7 @@ function horde.build_clusters(boxes)
                 for candidate_index = seed + 1, #ordered do
                     if not assigned[candidate_index] then
                         local candidate = ordered[candidate_index]
-                        if world_close_to_group(cluster, candidate) and
-                           (candidate.force_horde_merge or compact_after_add(cluster, candidate)) then
+                        if world_close_to_group(cluster, candidate) and compact_after_add(cluster, candidate) then
                             include_box(cluster, candidate)
                             assigned[candidate_index] = true
                             changed = true

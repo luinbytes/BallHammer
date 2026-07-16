@@ -11,18 +11,19 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Bone-projected boxes for all enemies, including enemies spawned or respawned after the mod loads
 - Distinct special-enemy names, `SPECIAL` flags, distances, outlines, and health bars
 - Distance fading and a visibility check that turns visible ESP white
-- World-space horde grouping with buffered off-screen membership, head or aim-bone dots, and reversible join/split animation
+- Compact world-space horde grouping with separate horizontal and elevation limits, buffered off-screen membership, aim-bone dots, and reversible join/split animation
 - Normal aimbot that acquires the visible target closest to the crosshair and keeps that target locked
 - Immediate target replacement when the lock dies or becomes occluded
 - Head or torso aim, configurable distance and field of view, interpolated smoothing, and aim curvature
 - Left mouse, right mouse, either mouse button, or a custom keyboard activation key
 - Timed repeat fire for press-driven, non-automatic weapons while mouse one is held and the aimbot has a valid target
+- Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; normal retargeting waits for companion damage, with a distance-based timeout for rejected orders
 
 Triggerbot and rage modes are not included. BallHammer uses one predictable normal-aim path.
 
 ## Configuration
 
-Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains separate **ESP** and **Aimbot** sections.
+Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains separate **ESP**, **Aimbot**, and **Companion** sections.
 
 ESP can also be toggled by entering `/esp` in the in-game chat or by assigning **Toggle ESP Keybind**. The aimbot remains active only while its configured activation is held. A locked target is retained outside the acquisition field of view while it remains alive and visible; releasing the activation clears the lock.
 

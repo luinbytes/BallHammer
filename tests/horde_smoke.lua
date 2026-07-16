@@ -73,17 +73,35 @@ local sparse = {
 clusters = horde.build_clusters(sparse)
 assert(#clusters == 2, "screen overlap alone must not merge distant enemies")
 
+local different_floor = {
+    box(1, 100, 100, 0),
+    box(2, 125, 104, 1),
+    box(3, 148, 108, 2),
+}
+different_floor[3].world.z = 2.2
+clusters = horde.build_clusters(different_floor)
+assert(#clusters == 2,
+    "enemies on a different elevation should not inflate the same horde box")
+
+local wide_y_gap = {
+    box(1, 100, 100, 0),
+    box(2, 125, 104, 1),
+    box(3, 148, 108, 2),
+}
+wide_y_gap[3].world.y = 3.5
+clusters = horde.build_clusters(wide_y_gap)
+assert(#clusters == 2,
+    "horde grouping should stay tight on both horizontal world axes")
+
 local infected_edge = {
     box(1, 100, 100, 0),
     box(2, 125, 104, 2),
     box(3, 148, 108, 4),
-    box(4, 171, 112, 6),
-    box(5, 194, 116, 8, true),
-    box(6, 217, 120, 10, true),
+    box(4, 171, 112, 4.8, true),
 }
 
 clusters = horde.build_clusters(infected_edge)
-assert(#clusters == 1 and clusters[1].count == 6,
-    "newly infected and armored infected should merge into an adjacent horde")
+assert(#clusters == 1 and clusters[1].count == 4,
+    "nearby newly infected and armored infected should still merge into a compact horde")
 
 print("BallHammer horde smoke: ok")

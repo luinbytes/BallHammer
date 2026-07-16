@@ -34,6 +34,21 @@ local BREED_DATA = {
     renegade_captain            = { name = "Captain",         color = { 255, 180, 0,   255 }, outline_color = { 0.7, 0,    1    }, slot = "smart_tagged_enemy" },
 }
 
+local COMPANION_DANGER = {
+    chaos_hound = 1,
+    chaos_armored_hound = 1,
+    chaos_poxwalker_bomber = 1,
+    cultist_mutant = 1,
+    renegade_netgunner = 1,
+    renegade_sniper = 0.95,
+    cultist_flamer = 0.95,
+    renegade_flamer = 0.95,
+    cultist_grenadier = 0.95,
+    renegade_grenadier = 0.95,
+    renegade_plasma_gunner = 0.95,
+    cultist_plasma_gunner = 0.95,
+}
+
 -- State
 local unit_data_map       = {}
 local active_markers      = {}
@@ -83,6 +98,14 @@ local aim_location      = "head"
 local aim_activation    = "left_mouse"
 local locked_target      = nil
 local locked_position    = nil
+local enable_companion_target = true
+local companion_distance = 60
+local companion_target = nil
+local companion_next_scan_t = 0
+local companion_waiting_for_damage = false
+local companion_wait_deadline_t = 0
+local companion_attackers = {}
+local next_smart_target_refresh_t = 0
 
 mod.get_unit_data         = function(unit) return unit_data_map[unit] end
 mod.get_enable_nameplates = function() return enable_nameplates end
@@ -90,6 +113,18 @@ mod.get_max_distance      = function() return max_distance end
 mod.get_enable_horde_esp  = function() return enable_horde_esp end
 mod.get_horde_distance    = function() return horde_distance end
 mod.get_aim_location      = function() return aim_location end
+
+local function refresh_marker_aim_node()
+    local node = aim_location == "torso" and "j_spine" or "j_head"
+    MarkerTemplate.unit_node = node
+    HordeMarkerTemplate.unit_node = node
+    for _, marker in pairs(marker_refs) do
+        if marker.template then marker.template.unit_node = node end
+    end
+    for _, marker in pairs(horde_marker_refs) do
+        if marker.template then marker.template.unit_node = node end
+    end
+end
 
 local function refresh_settings()
     enable_outlines   = mod:get("enable_outlines")
@@ -104,6 +139,9 @@ local function refresh_settings()
     aim_curve         = mod:get("aim_curve")
     aim_location      = mod:get("aim_location")
     aim_activation    = mod:get("aim_activation")
+    enable_companion_target = mod:get("enable_companion_target")
+    companion_distance = mod:get("companion_distance")
+    refresh_marker_aim_node()
 end
 
 local function activation_is_held(activation, custom_held, input_extension)
@@ -204,6 +242,14 @@ local function add_esp_for_unit(unit)
         outline_color = { 1, 0.31, 0.31 },
         slot = data and data.slot or (tags.special and "special_target" or "smart_tagged_enemy"),
         flag = (tags.monster or tags.captain or tags.cultist_captain) and "BOSS" or "SPECIAL",
+        base_height = breed.base_height or 1.8,
+        companion_targetable = breed.smart_tag_target_type == "breed",
+        companion_danger = COMPANION_DANGER[breed.name]
+            or COMPANION_DANGER[breed.name:gsub("_mutator$", "")]
+            or (tags.monster or tags.captain or tags.cultist_captain) and 0.85
+            or tags.special and 0.9
+            or tags.elite and 0.7
+            or 0.75,
     }
     if is_mutator then priority_data.name = priority_data.name .. " [M]" end
     unit_data_map[unit] = priority_data
@@ -260,6 +306,19 @@ mod.on_setting_changed = function(setting_id)
         aim_curve     = mod:get("aim_curve")
         aim_location  = mod:get("aim_location")
         aim_activation = mod:get("aim_activation")
+        refresh_marker_aim_node()
+        return
+    end
+
+    if setting_id == "enable_companion_target" or setting_id == "companion_distance" then
+        enable_companion_target = mod:get("enable_companion_target")
+        companion_distance = mod:get("companion_distance")
+        if not enable_companion_target then
+            companion_target = nil
+            companion_waiting_for_damage = false
+            companion_wait_deadline_t = 0
+            table.clear(companion_attackers)
+        end
         return
     end
 
@@ -483,7 +542,7 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
     end
 end)
 
-local function has_line_of_sight(physics_world, player_unit, target_unit, origin, direction, distance)
+local function has_line_of_sight(physics_world, target_unit, origin, direction, distance)
     local hits = PhysicsWorld.raycast(
         physics_world,
         origin,
@@ -491,17 +550,14 @@ local function has_line_of_sight(physics_world, player_unit, target_unit, origin
         distance,
         "all",
         "collision_filter",
-        "filter_player_character_shooting_raycast"
+        "filter_interactable_line_of_sight_marker_check"
     )
 
     if not hits then return true end
 
     for i = 1, #hits do
         local actor = hits[i][4]
-        local hit_unit = actor and Actor.unit(actor)
-        if not hit_unit then return false end
-        if hit_unit == target_unit then return true end
-        if hit_unit ~= player_unit then return false end
+        if actor and Actor.unit(actor) ~= target_unit then return false end
     end
 
     return true
@@ -528,7 +584,119 @@ local function fallback_aim_position(unit)
     return body + Vector3(0, 0, height * height_fraction)
 end
 
-local function target_metrics(physics_world, player_unit, target_unit, origin, camera_forward, distance_limit, fov, ignore_fov)
+local function player_camera_position(player, fallback)
+    local camera_manager = Managers.state and Managers.state.camera
+    if not camera_manager or not player.viewport_name then return fallback end
+    local ok, camera = pcall(camera_manager.camera, camera_manager, player.viewport_name)
+    if not ok or not camera then return fallback end
+    local position_ok, position = pcall(Camera.local_position, camera)
+    return position_ok and native_vector(position) or fallback
+end
+
+local function update_companion_target(player_unit, origin, physics_world, t)
+    if t < companion_next_scan_t - 1 then
+        companion_target = nil
+        companion_next_scan_t = 0
+        companion_waiting_for_damage = false
+        companion_wait_deadline_t = 0
+        table.clear(companion_attackers)
+    end
+    if not enable_companion_target then return end
+    if companion_target and (not HEALTH_ALIVE or not HEALTH_ALIVE[companion_target]) then
+        companion_target = nil
+        companion_waiting_for_damage = false
+        companion_wait_deadline_t = 0
+        companion_next_scan_t = 0
+        table.clear(companion_attackers)
+    end
+    if t < companion_next_scan_t then return end
+    companion_next_scan_t = t + 0.35
+
+    local spawner = ScriptUnit.has_extension(player_unit, "companion_spawner_system")
+    if not spawner or not spawner:companion_can_tag_order() then
+        companion_target = nil
+        companion_waiting_for_damage = false
+        companion_wait_deadline_t = 0
+        table.clear(companion_attackers)
+        return
+    end
+
+    local best_unit, best_score, best_wait, current_score, current_wait
+    for unit, data in pairs(unit_data_map) do
+        if data.companion_targetable and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
+            local body = native_vector(Unit.world_position(unit, 1))
+            if body then
+                local target_position = body + Vector3(0, 0, data.base_height * 0.6)
+                local offset = target_position - origin
+                local distance = Vector3.length(offset)
+                if distance > 0 and distance <= companion_distance and has_line_of_sight(
+                    physics_world, unit, origin, Vector3.normalize(offset), distance
+                ) then
+                    local health = ScriptUnit.has_extension(unit, "health_system")
+                    local health_fraction = health and math.clamp(health:current_health_percent(), 0, 1) or 1
+                    local score = data.companion_danger * 0.55
+                        + (1 - distance / companion_distance) * 0.3
+                        + (1 - health_fraction) * 0.15
+                    local wait_time = math.clamp(2 + distance / 8, 3, 10)
+                    if unit == companion_target then
+                        current_score, current_wait = score, wait_time
+                    end
+                    if not best_score or score > best_score then
+                        best_unit, best_score, best_wait = unit, score, wait_time
+                    end
+                end
+            end
+        end
+    end
+
+    if companion_waiting_for_damage and t < companion_wait_deadline_t then return end
+    companion_waiting_for_damage = false
+    companion_wait_deadline_t = 0
+
+    local chosen, chosen_wait = current_score and companion_target or best_unit,
+        current_score and current_wait or best_wait
+    if current_score and best_unit ~= companion_target and best_score > current_score + 0.08 then
+        chosen, chosen_wait = best_unit, best_wait
+    end
+    if not chosen then
+        companion_target = nil
+        table.clear(companion_attackers)
+        return
+    end
+
+    if chosen ~= companion_target then
+        local extension_manager = Managers.state and Managers.state.extension
+        local smart_tag_system = extension_manager and extension_manager:system("smart_tag_system")
+        if smart_tag_system then
+            smart_tag_system:set_contextual_unit_tag(player_unit, chosen, "companion_order")
+            table.clear(companion_attackers)
+            local companions = spawner:companion_units()
+            for i = 1, companions and #companions or 0 do
+                companion_attackers[companions[i]] = true
+            end
+            companion_waiting_for_damage = true
+            companion_wait_deadline_t = t + chosen_wait
+        else
+            companion_target = nil
+            return
+        end
+    end
+    companion_target = chosen
+end
+
+mod:hook_safe("AttackReportManager", "add_attack_result", function(
+    self, damage_profile, attacked_unit, attacking_unit, attack_direction,
+    hit_world_position, hit_weakspot, damage
+)
+    if companion_waiting_for_damage and damage and damage > 0
+        and attacked_unit == companion_target and companion_attackers[attacking_unit] then
+        companion_waiting_for_damage = false
+        companion_wait_deadline_t = 0
+        companion_next_scan_t = 0
+    end
+end)
+
+local function target_metrics(physics_world, target_unit, origin, camera_forward, distance_limit, fov, ignore_fov)
     if not HEALTH_ALIVE or not HEALTH_ALIVE[target_unit] then return nil end
     local first_position, first_score, first_distance
 
@@ -548,26 +716,24 @@ local function target_metrics(physics_world, player_unit, target_unit, origin, c
         if not first_position then
             first_position, first_score, first_distance = position, score, distance
         end
-        if has_line_of_sight(physics_world, player_unit, target_unit, origin, direction, distance) then
+        if has_line_of_sight(physics_world, target_unit, origin, direction, distance) then
             return position, score, true, distance
         end
     end
 
     local nodes = AIM_NODES[aim_location] or AIM_NODES.head
-    local found_node = false
+    local aim_position
     for i = 1, #nodes do
         local node_name = nodes[i]
         if Unit.has_node(target_unit, node_name) then
-            found_node = true
-            local position, score, visible = evaluate(native_vector(
-                Unit.world_position(target_unit, Unit.node(target_unit, node_name))
-            ))
-            if visible then return position, score, true end
+            aim_position = native_vector(Unit.world_position(target_unit, Unit.node(target_unit, node_name)))
+            break
         end
     end
-    if not found_node then
-        local position, score, visible = evaluate(fallback_aim_position(target_unit))
-        if visible then return position, score, true end
+    if not aim_position then aim_position = fallback_aim_position(target_unit) end
+    local position, score, visible, distance = evaluate(aim_position)
+    if visible then
+        return position, score, true, distance
     end
     return first_position, first_score, false, first_distance
 end
@@ -577,14 +743,14 @@ local function clear_aim_lock()
     locked_position = nil
 end
 
-local function select_aim_target(physics_world, player_unit, origin, camera_forward, distance_limit, fov, dt)
+local function select_aim_target(physics_world, origin, camera_forward, distance_limit, fov, dt, preferred_target)
     local current_position, current_visible
     if locked_target then
         if not HEALTH_ALIVE or not HEALTH_ALIVE[locked_target] then
             clear_aim_lock()
         else
             current_position, _, current_visible = target_metrics(
-                physics_world, player_unit, locked_target, origin, camera_forward,
+                physics_world, locked_target, origin, camera_forward,
                 distance_limit, fov, true
             )
             if not current_visible then clear_aim_lock() end
@@ -593,14 +759,25 @@ local function select_aim_target(physics_world, player_unit, origin, camera_forw
 
     local best_unit, best_position, best_score, best_distance
     if not locked_target then
-        for target_unit in pairs(aim_target_map) do
+        if preferred_target and aim_target_map[preferred_target] then
             local position, score, visible, distance = target_metrics(
-                physics_world, player_unit, target_unit, origin, camera_forward,
+                physics_world, preferred_target, origin, camera_forward,
                 distance_limit, fov, false
             )
-            if visible and (not best_score or score > best_score or
-               score == best_score and distance < best_distance) then
-                best_unit, best_position, best_score, best_distance = target_unit, position, score, distance
+            if visible then
+                best_unit, best_position, best_score, best_distance = preferred_target, position, score, distance
+            end
+        end
+        if not best_unit then
+            for target_unit in pairs(aim_target_map) do
+                local position, score, visible, distance = target_metrics(
+                    physics_world, target_unit, origin, camera_forward,
+                    distance_limit, fov, false
+                )
+                if visible and (not best_score or score > best_score or
+                   score == best_score and distance < best_distance) then
+                    best_unit, best_position, best_score, best_distance = target_unit, position, score, distance
+                end
             end
         end
     end
@@ -694,12 +871,6 @@ end)
 mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, unit, dt, t, frame)
     if not dt or dt <= 0 then return end
 
-    if not activation_is_held(aim_activation, aimbot_held, self._input_extension) then
-        auto_shoot_pressed = false
-        clear_aim_lock()
-        return
-    end
-
     local player = Managers.player and Managers.player:local_player(1)
     if not player or unit ~= player.player_unit or not player:unit_is_alive() then
         auto_shoot_pressed = false
@@ -713,11 +884,33 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     local first_person = unit_data:read_component("first_person")
     if not first_person or not first_person.position or not first_person.rotation then return end
 
-    local camera_forward = Quaternion.forward(first_person.rotation)
     local physics_world = World.physics_world(self._world)
+    local visibility_origin = player_camera_position(player, first_person.position)
+    update_companion_target(unit, visibility_origin, physics_world, t)
+
+    if not activation_is_held(aim_activation, aimbot_held, self._input_extension) then
+        auto_shoot_pressed = false
+        clear_aim_lock()
+        return
+    end
+
+    local camera_forward = Quaternion.forward(first_person.rotation)
+    local preferred_target
+    if not locked_target then
+        local smart_targeting = ScriptUnit.has_extension(unit, "smart_targeting_system")
+        if smart_targeting then
+            if t < next_smart_target_refresh_t - 1 then next_smart_target_refresh_t = 0 end
+            if t >= next_smart_target_refresh_t then
+                smart_targeting:force_update_smart_tag_targets()
+                next_smart_target_refresh_t = t + 0.1
+            end
+            local targeting_data = smart_targeting:smart_tag_targeting_data()
+            preferred_target = targeting_data and targeting_data.unit
+        end
+    end
     local target_position = select_aim_target(
-        physics_world, unit, first_person.position, camera_forward,
-        aim_distance, aim_fov, dt
+        physics_world, visibility_origin, camera_forward,
+        aim_distance, aim_fov, dt, preferred_target
     )
     if not target_position then
         auto_shoot_pressed = false
