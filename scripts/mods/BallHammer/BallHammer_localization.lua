@@ -1,6 +1,6 @@
 return {
     mod_name = { en = "BallHammer" },
-    mod_description = { en = "All-enemy ESP with persistent, visibility-aware normal aim" },
+    mod_description = { en = "All-enemy ESP with persistent aim, triggerbot, rage, and weapon controls" },
 
     esp_settings = { en = "ESP" },
     enable_outlines = { en = "Enemy Outlines" },
@@ -10,6 +10,10 @@ return {
     enable_horde_esp = { en = "All-Enemy Dynamic Boxes" },
     horde_distance = { en = "Dynamic Box Distance (m)" },
     toggle_key = { en = "Toggle ESP Keybind" },
+
+    pickup_settings = { en = "Pickup ESP" },
+    enable_pickup_esp = { en = "Show Pickups" },
+    pickup_distance = { en = "Pickup Distance (m)" },
 
     aimbot_settings = { en = "Aimbot" },
     aim_activation = { en = "Aim Activation" },
@@ -26,6 +30,18 @@ return {
     aim_fov = { en = "Aim Field of View (degrees)" },
     aim_smoothness = { en = "Aim Smoothness" },
     aim_curve = { en = "Aim Curve" },
+
+    triggerbot_settings = { en = "Magnet Triggerbot" },
+    trigger_activation = { en = "Trigger Activation" },
+    trigger_key = { en = "Custom Trigger Key (keyboard only)" },
+    trigger_fov = { en = "Magnet Field of View (degrees)" },
+    trigger_fire_fov = { en = "Fire Radius (degrees)" },
+    trigger_smoothness = { en = "Magnet Smoothness" },
+
+    rage_settings = { en = "Rage Mode" },
+    rage_key = { en = "Hold Rage Key" },
+    rage_distance = { en = "Rage Distance (m)" },
+    rage_smoothness = { en = "Rage Smoothness" },
 
     weapon_settings = { en = "Weapon" },
     enable_auto_fire = { en = "Automatic Semi-Auto Fire" },

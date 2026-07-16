@@ -11,36 +11,54 @@ get_mod = function() return mod end
 local data = dofile("scripts/mods/BallHammer/BallHammer_data.lua")
 local widgets = data.options.widgets
 
-assert(#widgets == 4, "menu should expose ESP, aimbot, weapon, and companion sections")
+assert(#widgets == 7, "menu should expose pickup ESP and all combat sections")
 assert(widgets[1].setting_id == "esp_settings", "ESP should be the first section")
-assert(widgets[2].setting_id == "aimbot_settings", "Aimbot should be the second section")
-assert(widgets[3].setting_id == "weapon_settings", "Weapon should be the third section")
-assert(widgets[4].setting_id == "companion_settings", "Companion should be the fourth section")
+assert(widgets[2].setting_id == "pickup_settings", "Pickup ESP should follow enemy ESP")
+assert(widgets[3].setting_id == "aimbot_settings", "Aimbot should follow ESP sections")
+assert(widgets[4].setting_id == "triggerbot_settings", "Triggerbot should follow the normal aimbot")
+assert(widgets[5].setting_id == "rage_settings", "Rage should follow triggerbot")
+assert(widgets[6].setting_id == "weapon_settings", "Weapon should follow aim modes")
+assert(widgets[7].setting_id == "companion_settings", "Companion should be the final section")
 
-local activation = widgets[2].sub_widgets[1]
+assert(widgets[2].sub_widgets[1].setting_id == "enable_pickup_esp"
+    and widgets[2].sub_widgets[1].default_value == true,
+    "pickup ESP should be enabled independently by default")
+assert(widgets[2].sub_widgets[2].setting_id == "pickup_distance",
+    "pickup ESP should expose a distance limit")
+
+local activation = widgets[3].sub_widgets[1]
 assert(activation.setting_id == "aim_activation" and activation.default_value == "left_mouse",
     "left mouse should be the default native aim activation")
 assert(activation.sub_widgets[1].setting_id == "aim_key",
     "custom keybind should be nested under aim activation")
 assert(activation.options[1].value == "off", "aim activation should be the single aimbot enable control")
 assert(activation.options[4].value == "both_mouse", "aimbot should support either mouse button")
-assert(widgets[2].sub_widgets[5].setting_id == "aim_smoothness", "aim speed should use a smoothness slider")
-assert(widgets[2].sub_widgets[6].setting_id == "aim_curve", "aimbot should expose curve strength")
-assert(widgets[3].sub_widgets[1].setting_id == "enable_auto_fire"
-    and widgets[3].sub_widgets[1].default_value == true,
+assert(widgets[3].sub_widgets[5].setting_id == "aim_smoothness", "aim speed should use a smoothness slider")
+assert(widgets[3].sub_widgets[6].setting_id == "aim_curve", "aimbot should expose curve strength")
+local trigger_activation = widgets[4].sub_widgets[1]
+assert(trigger_activation.setting_id == "trigger_activation"
+    and trigger_activation.default_value == "off",
+    "triggerbot should be opt-in and support native activation modes")
+assert(trigger_activation.sub_widgets[1].function_name == "triggerbot_held",
+    "triggerbot custom bind should use the held callback")
+assert(widgets[5].sub_widgets[1].setting_id == "rage_key"
+    and widgets[5].sub_widgets[1].function_name == "rage_held",
+    "rage should expose a held keybind")
+assert(widgets[6].sub_widgets[1].setting_id == "enable_auto_fire"
+    and widgets[6].sub_widgets[1].default_value == true,
     "semi-automatic repeat fire should have an independent weapon toggle")
-assert(widgets[3].sub_widgets[2].setting_id == "enable_no_recoil"
-    and widgets[3].sub_widgets[2].default_value == false,
+assert(widgets[6].sub_widgets[2].setting_id == "enable_no_recoil"
+    and widgets[6].sub_widgets[2].default_value == false,
     "recoil suppression should have an independent weapon toggle")
-assert(widgets[3].sub_widgets[3].setting_id == "enable_no_spread"
-    and widgets[3].sub_widgets[3].default_value == false,
+assert(widgets[6].sub_widgets[3].setting_id == "enable_no_spread"
+    and widgets[6].sub_widgets[3].default_value == false,
     "spread suppression should have an independent weapon toggle")
-assert(widgets[4].sub_widgets[1].setting_id == "enable_companion_target",
+assert(widgets[7].sub_widgets[1].setting_id == "enable_companion_target",
     "companion auto-target should have an independent toggle")
-assert(widgets[4].sub_widgets[2].setting_id == "companion_distance",
+assert(widgets[7].sub_widgets[2].setting_id == "companion_distance",
     "companion auto-target should expose a range limit")
-assert(widgets[4].sub_widgets[3].setting_id == "enable_auto_whistle"
-    and widgets[4].sub_widgets[3].default_value == false,
+assert(widgets[7].sub_widgets[3].setting_id == "enable_auto_whistle"
+    and widgets[7].sub_widgets[3].default_value == false,
     "automatic dog EMP should have an independent opt-in toggle")
 
 local function check_localization(widget)

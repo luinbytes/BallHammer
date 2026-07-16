@@ -91,7 +91,9 @@ local settings = {
     enable_outlines = false,
     enable_nameplates = false,
     enable_horde_esp = true,
+    enable_pickup_esp = true,
     horde_distance = 80,
+    pickup_distance = 80,
     max_distance = 80,
     outline_distance = 30,
     enable_aimbot = true,
@@ -101,6 +103,12 @@ local settings = {
     aim_curve = 20,
     aim_location = "head",
     aim_activation = "left_mouse",
+    trigger_activation = "off",
+    trigger_fov = 5,
+    trigger_fire_fov = 0.8,
+    trigger_smoothness = 35,
+    rage_distance = 120,
+    rage_smoothness = 10,
     enable_auto_fire = true,
     enable_no_recoil = false,
     enable_no_spread = false,
@@ -111,11 +119,6 @@ local settings = {
 local messages = {}
 local hooks = {}
 local parsed_fire_pressed = false
-local parsed_grenade_pressed_reads = 0
-local whistle_aim_started_t = nil
-local whistle_activations = 0
-local last_grenade_hold = false
-local action_input_update_error = false
 local shot_ready = false
 local recoil_calls = 0
 local recoil_offset_calls = 0
@@ -142,16 +145,11 @@ end
 package.preload["scripts/utilities/weapon/weapon_template"] = function()
     return { current_weapon_template = function(component) return component.template end }
 end
-local ActionInputParser = {
-    mispredict_happened = function() end,
-    _this_frames_inputs = function(_, input_extension)
-        return {
-            action_one_pressed = input_extension:get("action_one_pressed"),
-            action_one_hold = input_extension:get("action_one_hold"),
-            action_two_hold = input_extension:get("action_two_hold"),
-            grenade_ability_pressed = input_extension:get("grenade_ability_pressed"),
-            grenade_ability_hold = input_extension:get("grenade_ability_hold"),
-        }
+local HumanInputHandler = {
+    _parse_input = function(self, input_cache, input_service, index)
+        for action, cache_index in pairs(self._action_lookup) do
+            input_cache[cache_index][index] = input_service:get_with_filters(action)
+        end
     end,
 }
 package.preload["scripts/extension_systems/action_input/action_input_parser"] = function()
@@ -160,7 +158,9 @@ end
 local mod = {
     get = function(_, key) return settings[key] end,
     io_dofile = function(_, path)
-        return { name = path:find("HordeMarker") and "ballhammer_horde_marker" or "ballhammer_marker" }
+        return { name = path:find("HordeMarker") and "ballhammer_horde_marker"
+            or path:find("PickupMarker") and "ballhammer_pickup_marker"
+            or "ballhammer_marker" }
     end,
     command = function() end,
     echo = function(_, message) messages[#messages + 1] = message end,
@@ -186,29 +186,7 @@ CLASS = {
     },
     OutlineSystem = {},
     PlayerUnitInputExtension = { get = function() return false end },
-    PlayerUnitActionInputExtension = {
-        fixed_update = function(_, _, _, t)
-            if action_input_update_error then error("action input update failed") end
-            local input = { _is_local_unit = true }
-            parsed_fire_pressed = CLASS.PlayerUnitInputExtension.get(input, "action_one_pressed")
-            CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_hold")
-            if CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_pressed") then
-                parsed_grenade_pressed_reads = parsed_grenade_pressed_reads + 1
-            end
-            local ability_hold = CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_hold")
-            last_grenade_hold = ability_hold
-            local ability_pressed = CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_pressed")
-            if ability_pressed then
-                parsed_grenade_pressed_reads = parsed_grenade_pressed_reads + 1
-            end
-            if ability_pressed and ability_hold then
-                whistle_aim_started_t = t
-            elseif whistle_aim_started_t and not ability_hold and t - whistle_aim_started_t >= 0.075 then
-                whistle_aim_started_t = nil
-                whistle_activations = whistle_activations + 1
-            end
-        end,
-    },
+    PlayerUnitActionInputExtension = { fixed_update = function() end },
     PlayerUnitWeaponSpreadExtension = {
         randomized_spread = function(_, rotation)
             randomized_spread_calls = randomized_spread_calls + 1
@@ -238,6 +216,7 @@ local player = {
 local marker_events = {}
 local held_action = "action_one_hold"
 local preexisting_units = {}
+local preexisting_pickups = {}
 local smart_direct_target
 local smart_target_updates = 0
 local companion_can_order = false
@@ -265,6 +244,15 @@ local weapon_action_inputs = {
         input_sequence = { { input = "action_one_pressed", value = true } },
     },
 }
+local weapon_action_component = {
+    current_action_name = "action_shoot_hip",
+    start_t = 1.0,
+    template = { action_inputs = weapon_action_inputs },
+}
+local weapon_extension = {
+    action_input_is_currently_valid = function() return shot_ready end,
+    recoil_template = function() return {} end,
+}
 Managers = {
     player = { local_player = function() return player end },
     input = {
@@ -277,6 +265,7 @@ Managers = {
         end,
     },
     state = {
+        game_session = { fixed_time_step = 0.1 },
         camera = {
             camera = function(_, viewport_name)
                 assert(viewport_name == "player_1")
@@ -285,8 +274,9 @@ Managers = {
         },
         extension = {
             get_entities = function(_, name)
-                assert(name == "MinionUnitDataExtension")
-                return preexisting_units
+                if name == "MinionUnitDataExtension" then return preexisting_units end
+                if name == "InteracteeExtension" then return preexisting_pickups end
+                error("unexpected extension query: " .. tostring(name))
             end,
             system = function(_, name)
                 if name == "smart_tag_system" then
@@ -344,6 +334,7 @@ ScriptUnit = {
                 }
             end
             if system == "ability_system" then return ability_extension end
+            if system == "weapon_system" then return weapon_extension end
             if system == "first_person_system" then
                 return { _recoil_component = local_recoil_component }
             end
@@ -353,7 +344,7 @@ ScriptUnit = {
                         return { position = Vector3(0, 0, 0), rotation = camera_rotation }
                     end
                     if name == "weapon_action" then
-                        return { template = { action_inputs = weapon_action_inputs } }
+                        return weapon_action_component
                     end
                     if name == "disabled_character_state" then
                         return {
@@ -379,6 +370,11 @@ ScriptUnit = {
     end,
 }
 Unit = {
+    get_data = function(unit, key)
+        local data = units[unit]
+        if key == "pickup_type" then return data and data.pickup_type end
+        if key == "is_pickup" then return data and data.pickup_type ~= nil end
+    end,
     has_node = function(unit, name)
         local nodes = units[unit].nodes
         return not nodes or nodes[name] ~= nil
@@ -436,8 +432,7 @@ local function apply_delayed_hook(object_name, object, method)
         return handler(original, ...)
     end
 end
-apply_delayed_hook("ActionInputParser", ActionInputParser, "_this_frames_inputs")
-apply_delayed_hook("ActionInputParser", ActionInputParser, "mispredict_happened")
+apply_delayed_hook("HumanInputHandler", HumanInputHandler, "_parse_input")
 apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
     CLASS.PlayerUnitWeaponSpreadExtension, "randomized_spread")
 apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
@@ -493,6 +488,32 @@ recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, remote_weapon_unit)
 assert(recoil_calls == 3, "no recoil must not alter remote weapon prediction")
 
 hooks["HudElementWorldMarkers.init"]({ _marker_templates = {} })
+local plasteel_pickup = {}
+units[plasteel_pickup] = {
+    pickup_type = "large_metal",
+    position = Vector3(1, 6, 0),
+}
+ALIVE[plasteel_pickup] = true
+preexisting_pickups[plasteel_pickup] = true
+for frame = 1, 60 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
+assert(marker_events[1] and marker_events[1].marker_name == "ballhammer_pickup_marker"
+    and marker_events[1].data.name == "Plasteel",
+    "pickup ESP should discover and classify materials that predate a hot reload")
+table.clear(preexisting_pickups)
+settings.enable_pickup_esp = false
+mod.on_setting_changed("enable_pickup_esp")
+local pickup_events_before = #marker_events
+local ammo_pickup = {}
+units[ammo_pickup] = { pickup_type = "large_clip", position = Vector3(1, 7, 0) }
+ALIVE[ammo_pickup] = true
+hooks["InteracteeExtension.init"](nil, nil, ammo_pickup)
+assert(#marker_events == pickup_events_before,
+    "pickup ESP should respect its independent setting")
+settings.enable_pickup_esp = true
+mod.on_setting_changed("enable_pickup_esp")
+table.clear(marker_events)
+ALIVE[plasteel_pickup], ALIVE[ammo_pickup] = false, false
+
 local preexisting_unit = {}
 units[preexisting_unit] = {
     breed_data = { name = "renegade_rifleman", base_height = 1.8, tags = { minion = true, roamer = true } },
@@ -650,10 +671,7 @@ held_action = "action_two_hold"
 
 local first_person_extension = {
     _world = gameplay_world,
-    _weapon_extension = {
-        recoil_template = function() return {} end,
-        action_input_is_currently_valid = function() return shot_ready end,
-    },
+    _weapon_extension = weapon_extension,
     _recoil_component = local_recoil_component,
     _movement_state_component = {},
     _locomotion_component = {},
@@ -852,88 +870,63 @@ held_action = "action_one_hold"
 shot_ready = true
 assert(not parsed_fire_pressed,
     "semi-automatic repeat fire must not forge action_one_pressed inside Darktide's input parser")
-local weapon_parser = {
-    _action_component_name = "weapon_action",
-    _action_component = {
-        start_t = 1.0,
-        template = { action_inputs = weapon_action_inputs },
+local input_values = { action_one_hold = true }
+local input_service = {
+    get_with_filters = function(_, action) return input_values[action] or false end,
+}
+local input_handler = {
+    _action_lookup = {
+        action_one_hold = 1,
+        action_one_pressed = 2,
+        action_two_hold = 3,
+        grenade_ability_pressed = 4,
+        grenade_ability_hold = 5,
     },
-    _config_data = { action_extension = first_person_extension._weapon_extension },
-    _last_fixed_frame = 11,
-    _fixed_time_step = 0.1,
+    _frame = 11,
+    _player = player,
 }
-local weapon_inputs = ActionInputParser._this_frames_inputs(
-    weapon_parser, first_person_extension._input_extension
-)
-assert(weapon_inputs.action_one_pressed,
-    "ready semi-automatic fire should not require an aimbot target")
-weapon_inputs = ActionInputParser._this_frames_inputs(
-    weapon_parser, first_person_extension._input_extension
-)
-assert(not weapon_inputs.action_one_pressed,
-    "semi-automatic fire should queue only one press per acknowledged weapon action")
-ActionInputParser.mispredict_happened(weapon_parser)
-weapon_inputs = ActionInputParser._this_frames_inputs(
-    weapon_parser, first_person_extension._input_extension
-)
-assert(weapon_inputs.action_one_pressed,
-    "semi-automatic fire should restore its press after multiplayer prediction rollback")
-weapon_parser._action_component.start_t = 1.1
-weapon_inputs = ActionInputParser._this_frames_inputs(
-    weapon_parser, first_person_extension._input_extension
-)
-assert(weapon_inputs.action_one_pressed,
-    "semi-automatic fire should queue the next press after the weapon action advances")
-local remote_input_extension = {
-    _is_local_unit = false,
-    get = first_person_extension._input_extension.get,
-}
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, remote_input_extension)
-assert(not weapon_inputs.action_one_pressed,
-    "semi-automatic repeat fire must never alter a remote player's predicted input")
+local network_input_cache = { {}, {}, {}, {}, {} }
+local function parse_network_input(index)
+    HumanInputHandler._parse_input(input_handler, network_input_cache, input_service, index)
+    input_handler._frame = input_handler._frame + 1
+    return network_input_cache[2][index], network_input_cache[4][index],
+        network_input_cache[5][index], network_input_cache[1][index]
+end
+assert(parse_network_input(1),
+    "semi-automatic fire must add its press to Darktide's networked input frame")
+assert(not parse_network_input(2),
+    "semi-automatic fire should send only one press per weapon action")
+hooks["ActionInputParser.mispredict_happened"]({
+    _player = player,
+    _action_component_name = "weapon_action",
+})
+assert(parse_network_input(2.5),
+    "multiplayer rollback should allow the same weapon action press to be resent")
+weapon_action_component.start_t = 1.1
+assert(parse_network_input(3),
+    "semi-automatic fire should send the next press after the weapon action advances")
 settings.enable_auto_fire = false
 mod.on_setting_changed("enable_auto_fire")
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
-assert(not weapon_inputs.action_one_pressed,
+weapon_action_component.start_t = 1.2
+assert(not parse_network_input(4),
     "semi-automatic repeat fire should respect its independent weapon setting")
 settings.enable_auto_fire = true
 mod.on_setting_changed("enable_auto_fire")
-local ability_inputs = ActionInputParser._this_frames_inputs({
-    _action_component_name = "grenade_ability_action",
-    _action_component = { template_name = "adamant_grenade" },
-    _config_data = { action_extension = ability_extension },
-    _last_fixed_frame = 11,
-    _fixed_time_step = 0.1,
-}, first_person_extension._input_extension)
-assert(not ability_inputs.action_one_pressed,
-    "semi-automatic repeat fire must not leak into ability input parsers")
 shot_ready = false
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.2, 12)
-weapon_parser._last_fixed_frame = 12
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
-assert(not weapon_inputs.action_one_pressed,
+assert(not parse_network_input(5),
     "semi-automatic fire should wait for Darktide's action timing")
 shot_ready = true
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.3, 13)
-weapon_parser._last_fixed_frame = 13
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
-assert(not weapon_inputs.action_one_pressed,
-    "semi-automatic fire should wait for the previous press to advance the weapon action")
-weapon_parser._action_component.start_t = 1.2
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
-assert(weapon_inputs.action_one_pressed,
-    "semi-automatic fire should press again after the weapon action advances")
+assert(parse_network_input(6),
+    "semi-automatic fire should send when Darktide accepts the action")
 
 weapon_action_inputs = {
     shoot_pressed = {
         input_sequence = { { input = "action_one_hold", value = true } },
     },
 }
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.4, 14)
-weapon_parser._action_component.template.action_inputs = weapon_action_inputs
-weapon_parser._last_fixed_frame = 14
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
-assert(not weapon_inputs.action_one_pressed,
+weapon_action_component.template.action_inputs = weapon_action_inputs
+weapon_action_component.start_t = 1.3
+assert(not parse_network_input(7),
     "holding mouse one should not repeat presses for an automatic fire action")
 weapon_action_inputs = {
     shoot = {
@@ -943,12 +936,77 @@ weapon_action_inputs = {
         input_sequence = { { input = "action_one_pressed", value = true } },
     },
 }
-weapon_parser._action_component.template.action_inputs = weapon_action_inputs
-weapon_parser._action_component.start_t = 1.3
-weapon_parser._last_fixed_frame = 15
-weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
-assert(weapon_inputs.action_one_pressed,
+weapon_action_component.template.action_inputs = weapon_action_inputs
+weapon_action_component.start_t = 1.4
+assert(parse_network_input(8),
     "press-driven weapons named shoot should repeat with Darktide's native timing")
+input_values.action_one_hold = false
+assert(not parse_network_input(9),
+    "releasing mouse one should stop and reset semi-automatic fire")
+
+settings.aim_activation = "off"
+settings.trigger_activation = "custom"
+settings.trigger_fov = 5
+settings.trigger_fire_fov = 0.8
+settings.trigger_smoothness = 0
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+mod.on_setting_changed("trigger_fov")
+mod.on_setting_changed("trigger_fire_fov")
+mod.on_setting_changed("trigger_smoothness")
+camera_rotation = Vector3.normalize(Vector3(4, 20, 0))
+orientation.yaw = math.atan2(20, 4) - math.pi * 0.5
+orientation.pitch = 0
+weapon_action_component.start_t = 1.5
+mod.triggerbot_held(true)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.0, 20
+)
+input_handler._frame = 21
+local trigger_pressed, _, _, trigger_hold = parse_network_input(10)
+assert(trigger_pressed and trigger_hold,
+    "triggerbot fire must be written into Darktide's networked input frame")
+mod.triggerbot_held(false)
+weapon_action_component.start_t = 1.6
+local released_trigger_pressed = parse_network_input(11)
+assert(not released_trigger_pressed,
+    "releasing the trigger bind must cancel generated fire without a sticky mouse-one frame")
+
+for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+local rage_target = {}
+units[rage_target] = {
+    breed_data = {
+        name = "chaos_hound",
+        base_height = 1.4,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(4, 20, 0),
+}
+HEALTH_ALIVE[rage_target] = true
+hooks["HealthExtension.init"](nil, nil, rage_target)
+settings.aim_fov = 5
+settings.rage_distance = 120
+settings.rage_smoothness = 0
+mod.on_setting_changed("aim_fov")
+mod.on_setting_changed("rage_distance")
+mod.on_setting_changed("rage_smoothness")
+camera_rotation = Vector3(0, 1, 0)
+orientation.yaw = math.atan2(20, 4) - math.pi * 0.5
+orientation.pitch = 0
+weapon_action_component.start_t = 1.7
+mod.rage_held(true)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.2, 22
+)
+input_handler._frame = 23
+local rage_pressed, _, _, rage_hold = parse_network_input(12)
+assert(rage_pressed and rage_hold,
+    "rage must acquire a visible on-screen target outside normal FOV and network its shot")
+mod.rage_held(false)
+weapon_action_component.start_t = 1.8
+assert(not parse_network_input(13),
+    "releasing rage must cancel generated fire")
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 local companion_hound, companion_gunner = {}, {}
@@ -1003,46 +1061,35 @@ assert(#companion_orders == 1,
 hooks["AttackReportManager.add_attack_result"](
     {}, {}, companion_gunner, companion_unit, {}, nil, false, 10
 )
-local whistle_reads_before = parsed_grenade_pressed_reads
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.1, 31)
-assert(parsed_grenade_pressed_reads == whistle_reads_before,
-    "companion damage must not auto-use a different Arbites grenade ability")
+input_handler._frame = 31
+local _, grenade_pressed = parse_network_input(20)
+assert(not grenade_pressed,
+    "companion damage must not network a different Arbites grenade ability")
 whistle_equipped = true
 settings.enable_auto_whistle = true
 mod.on_setting_changed("enable_auto_whistle")
 hooks["AttackReportManager.add_attack_result"](
     {}, {}, companion_gunner, companion_unit, {}, nil, false, 10
 )
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.15, 31)
-assert(parsed_grenade_pressed_reads == whistle_reads_before,
+_, grenade_pressed = parse_network_input(21)
+assert(not grenade_pressed,
     "the Arbites whistle must not fire without an available charge")
 whistle_charged = true
 whistle_action_valid = false
 hooks["AttackReportManager.add_attack_result"](
-    {}, {}, companion_gunner, companion_network_unit, {}, nil, false, 10,
+    {}, {}, companion_gunner, companion_network_unit, {}, nil, false, 0,
     nil, "companion_dog"
 )
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.2, 32)
-assert(parsed_grenade_pressed_reads == whistle_reads_before,
+_, grenade_pressed = parse_network_input(22)
+assert(not grenade_pressed,
     "the Arbites whistle should wait until Darktide's ability parser accepts the input")
 whistle_action_valid = true
-action_input_update_error = true
-local failed_update_ok = pcall(
-    CLASS.PlayerUnitActionInputExtension.fixed_update, {}, player_unit, 0.1, 3.21, 33
-)
-assert(not failed_update_ok and not CLASS.PlayerUnitInputExtension.get(
-    { _is_local_unit = true }, "grenade_ability_pressed"
-), "a failed action-input update must close the synthetic whistle window")
-action_input_update_error = false
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.21, 33)
-assert(parsed_grenade_pressed_reads == whistle_reads_before + 2,
-    "a charged Arbites whistle should reach weapon and ability parsers once when the dog attacks")
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.26, 34)
-assert(parsed_grenade_pressed_reads == whistle_reads_before + 2,
-    "the dog EMP should not repeat for the same attacked target")
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.30, 35)
-assert(whistle_activations == 1,
-    "automatic dog EMP must complete Darktide's native press, hold, and release sequence")
+local _, network_grenade_pressed, network_grenade_hold = parse_network_input(23)
+assert(network_grenade_pressed and network_grenade_hold,
+    "a zero-damage dog contact must still network a charged Arbites whistle")
+_, network_grenade_pressed, network_grenade_hold = parse_network_input(24)
+assert(not network_grenade_pressed and not network_grenade_hold,
+    "automatic dog EMP must release after its native press and hold sequence")
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 3.2, 32)
 assert(companion_orders[2] and companion_orders[2].target == companion_hound,
     "companion damage should unlock a switch to a more dangerous target")
@@ -1061,18 +1108,17 @@ HEALTH_ALIVE[companion_gunner] = false
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 6.22, 63)
 assert(companion_orders[4] and companion_orders[4].target == companion_hound,
     "a dead commanded target should unlock an immediate replacement")
-local disabled_whistle_activations = whistle_activations
 hooks["AttackReportManager.add_attack_result"](
     {}, {}, companion_hound, companion_unit, {}, nil, false, 10
 )
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.23, 64)
-assert(whistle_activations == disabled_whistle_activations,
+input_handler._frame = 64
+_, network_grenade_pressed = parse_network_input(25)
+assert(not network_grenade_pressed,
     "automatic dog EMP should respect its independent companion setting")
 settings.enable_auto_whistle = true
 mod.on_setting_changed("enable_auto_whistle")
-local whistle_reads_before_attack = parsed_grenade_pressed_reads
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.23, 64)
-assert(parsed_grenade_pressed_reads == whistle_reads_before_attack,
+_, network_grenade_pressed = parse_network_input(26)
+assert(not network_grenade_pressed,
     "automatic dog EMP must wait for confirmed dog attack damage")
 BLACKBOARDS[companion_unit] = {
     behavior = { move_state = "attacking" },
@@ -1081,11 +1127,12 @@ BLACKBOARDS[companion_unit] = {
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 6.235, 65
 )
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.24, 65)
-assert(parsed_grenade_pressed_reads == whistle_reads_before_attack + 2,
-    "automatic dog EMP should begin when the owned dog reaches its pounce target")
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 0.1, 1)
-assert(not last_grenade_hold,
+_, network_grenade_pressed, network_grenade_hold = parse_network_input(27)
+assert(network_grenade_pressed and network_grenade_hold,
+    "owned dog contact should network the EMP press and hold")
+input_handler._frame = 1
+_, network_grenade_pressed, network_grenade_hold = parse_network_input(28)
+assert(not network_grenade_pressed and not network_grenade_hold,
     "a gameplay-time rewind must cancel an active automatic whistle hold")
 HEALTH_ALIVE[companion_gunner] = true
 units[companion_gunner].position = Vector3(8, 50, 0)

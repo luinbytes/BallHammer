@@ -4,7 +4,7 @@
 [![Darktide Mod Framework](https://img.shields.io/badge/Darktide-Mod_Framework-EF4135)](https://github.com/Darktide-Mod-Framework/Darktide-Mod-Framework)
 [![Latest commit](https://img.shields.io/github/last-commit/luinbytes/BallHammer)](https://github.com/luinbytes/BallHammer/commits/main)
 
-BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framework/Darktide-Mod-Framework) mod with all-enemy ESP and a configurable normal aimbot.
+BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framework/Darktide-Mod-Framework) mod with all-enemy and pickup ESP plus configurable aim modes.
 
 ## Features
 
@@ -16,15 +16,16 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Immediate target replacement when the lock dies or becomes occluded
 - Head or torso aim, configurable distance and field of view, interpolated smoothing, and aim curvature
 - Left mouse, right mouse, either mouse button, or a custom keyboard activation key
+- Configurable magnet triggerbot with aim radius, fire radius, and smoothing
+- Rage mode that selects visible on-screen targets using danger, range, and crosshair weighting
 - Optional timed repeat fire for press-driven, non-automatic weapons whenever mouse one is held
 - Optional local weapon recoil and spread suppression without camera compensation
-- Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP fires when the dog connects
-
-Triggerbot and rage modes are not included. BallHammer uses one predictable normal-aim path.
+- Pickup labels for plasteel, diamantine, ammo, grenades, deployables, stimms, mission items, and other interactable pickups with configurable range and distance fading
+- Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects
 
 ## Configuration
 
-Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains separate **ESP**, **Aimbot**, and **Companion** sections.
+Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains separate **ESP**, **Pickup ESP**, **Aimbot**, **Magnet Triggerbot**, **Rage Mode**, **Weapon**, and **Companion** sections.
 
 ESP can also be toggled by entering `/esp` in the in-game chat or by assigning **Toggle ESP Keybind**. The aimbot remains active only while its configured activation is held. A locked target is retained outside the acquisition field of view while it remains alive and visible; releasing the activation clears the lock.
 
