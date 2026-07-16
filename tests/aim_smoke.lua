@@ -299,6 +299,8 @@ Managers = {
 
 local units = {}
 local camera_rotation = Vector3(0, 1, 0)
+local disabling_unit = nil
+local disabling_type = "none"
 ScriptUnit = {
     has_extension = function(unit, system)
         if unit == player_unit then
@@ -326,6 +328,13 @@ ScriptUnit = {
                     end
                     if name == "weapon_action" then
                         return { template = { action_inputs = weapon_action_inputs } }
+                    end
+                    if name == "disabled_character_state" then
+                        return {
+                            is_disabled = disabling_unit ~= nil,
+                            disabling_unit = disabling_unit,
+                            disabling_type = disabling_type,
+                        }
                     end
                     return { yaw_offset = 0, pitch_offset = 0, offset_x = 0, offset_y = 0 }
                 end,
@@ -1002,6 +1011,22 @@ assert(parsed_grenade_pressed_reads == whistle_reads_before_attack + 2,
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 0.1, 1)
 assert(not last_grenade_hold,
     "a gameplay-time rewind must cancel an active automatic whistle hold")
+HEALTH_ALIVE[companion_gunner] = true
+units[companion_gunner].position = Vector3(8, 50, 0)
+units[companion_hound].position = Vector3(2, 5, 0)
+disabling_unit = companion_gunner
+disabling_type = "netted"
+local orders_before_rescue = #companion_orders
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 6.25, 66)
+assert(#companion_orders == orders_before_rescue,
+    "Darktide's native-excluded netted state should not trigger a rescue override")
+disabling_type = "pounced"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 6.3, 67)
+assert(#companion_orders == orders_before_rescue + 1
+    and companion_orders[#companion_orders].target == companion_gunner,
+    "a local-player disabling attacker must override normal companion targeting")
+disabling_unit = nil
+disabling_type = "none"
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 held_action = "action_one_hold"

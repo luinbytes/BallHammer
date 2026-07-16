@@ -49,6 +49,13 @@ local COMPANION_DANGER = {
     renegade_plasma_gunner = 0.95,
     cultist_plasma_gunner = 0.95,
 }
+local COMPANION_RESCUE_TYPES = {
+    pounced = true,
+    warp_grabbed = true,
+    mutant_charged = true,
+    consumed = true,
+    grabbed = true,
+}
 
 -- State
 local unit_data_map       = {}
@@ -619,6 +626,23 @@ local function player_camera_position(player, fallback)
     return position_ok and native_vector(position) or fallback
 end
 
+local function order_companion_target(player_unit, spawner, target, t, wait_time)
+    local extension_manager = Managers.state and Managers.state.extension
+    local smart_tag_system = extension_manager and extension_manager:system("smart_tag_system")
+    if not smart_tag_system then return false end
+
+    smart_tag_system:set_contextual_unit_tag(player_unit, target, "companion_order")
+    table.clear(companion_attackers)
+    local companions = spawner:companion_units()
+    for i = 1, companions and #companions or 0 do
+        companion_attackers[companions[i]] = true
+    end
+    companion_waiting_for_damage = true
+    companion_wait_deadline_t = t + wait_time
+    companion_target = target
+    return true
+end
+
 local function update_companion_target(player_unit, origin, physics_world, t)
     if t < companion_next_scan_t - 1 then
         companion_target = nil
@@ -642,9 +666,6 @@ local function update_companion_target(player_unit, origin, physics_world, t)
     if auto_whistle_used_target and (not HEALTH_ALIVE or not HEALTH_ALIVE[auto_whistle_used_target]) then
         auto_whistle_used_target = nil
     end
-    if t < companion_next_scan_t then return end
-    companion_next_scan_t = t + 0.35
-
     local spawner = ScriptUnit.has_extension(player_unit, "companion_spawner_system")
     if not spawner or not spawner:companion_can_tag_order() then
         companion_target = nil
@@ -653,6 +674,21 @@ local function update_companion_target(player_unit, origin, physics_world, t)
         table.clear(companion_attackers)
         return
     end
+
+    local player_unit_data = ScriptUnit.has_extension(player_unit, "unit_data_system")
+    local disabled_state = player_unit_data and player_unit_data:read_component("disabled_character_state")
+    local disabling_unit = disabled_state and disabled_state.is_disabled
+        and COMPANION_RESCUE_TYPES[disabled_state.disabling_type]
+        and disabled_state.disabling_unit
+    if disabling_unit and HEALTH_ALIVE and HEALTH_ALIVE[disabling_unit] then
+        if disabling_unit ~= companion_target then
+            order_companion_target(player_unit, spawner, disabling_unit, t, 3)
+        end
+        return
+    end
+
+    if t < companion_next_scan_t then return end
+    companion_next_scan_t = t + 0.35
 
     local best_unit, best_score, best_wait, current_score, current_wait
     for unit, data in pairs(unit_data_map) do
@@ -698,18 +734,7 @@ local function update_companion_target(player_unit, origin, physics_world, t)
     end
 
     if chosen ~= companion_target then
-        local extension_manager = Managers.state and Managers.state.extension
-        local smart_tag_system = extension_manager and extension_manager:system("smart_tag_system")
-        if smart_tag_system then
-            smart_tag_system:set_contextual_unit_tag(player_unit, chosen, "companion_order")
-            table.clear(companion_attackers)
-            local companions = spawner:companion_units()
-            for i = 1, companions and #companions or 0 do
-                companion_attackers[companions[i]] = true
-            end
-            companion_waiting_for_damage = true
-            companion_wait_deadline_t = t + chosen_wait
-        else
+        if not order_companion_target(player_unit, spawner, chosen, t, chosen_wait) then
             companion_target = nil
             return
         end
