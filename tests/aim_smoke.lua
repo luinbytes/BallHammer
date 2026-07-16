@@ -119,9 +119,14 @@ local action_input_update_error = false
 local shot_ready = false
 local recoil_calls = 0
 local recoil_offset_calls = 0
+local randomized_spread_calls = 0
+local target_style_spread_calls = 0
 local recoil_api = {
     first_person_offset = function(_, recoil)
         recoil_offset_calls = recoil_offset_calls + 1
+        return recoil.pitch_offset, recoil.yaw_offset
+    end,
+    weapon_offset = function(_, recoil)
         return recoil.pitch_offset, recoil.yaw_offset
     end,
     add_recoil = function()
@@ -131,10 +136,14 @@ local recoil_api = {
 package.preload["scripts/utilities/recoil"] = function()
     return recoil_api
 end
+package.preload["scripts/settings/damage/attack_settings"] = function()
+    return { attack_types = { companion_dog = "companion_dog" } }
+end
 package.preload["scripts/utilities/weapon/weapon_template"] = function()
     return { current_weapon_template = function(component) return component.template end }
 end
 local ActionInputParser = {
+    mispredict_happened = function() end,
     _this_frames_inputs = function(_, input_extension)
         return {
             action_one_pressed = input_extension:get("action_one_pressed"),
@@ -201,13 +210,21 @@ CLASS = {
         end,
     },
     PlayerUnitWeaponSpreadExtension = {
-        randomized_spread = function(_, rotation) return { spread = rotation } end,
-        target_style_spread = function(_, rotation) return { spread = rotation } end,
+        randomized_spread = function(_, rotation)
+            randomized_spread_calls = randomized_spread_calls + 1
+            return { spread = rotation }
+        end,
+        target_style_spread = function(_, rotation)
+            target_style_spread_calls = target_style_spread_calls + 1
+            return { spread = rotation }
+        end,
     },
 }
 local player_unit = {}
+local local_recoil_component = { pitch_offset = 0.4, yaw_offset = -0.2 }
 HEALTH_ALIVE = {}
 ALIVE = { [player_unit] = true }
+BLACKBOARDS = {}
 local orientation = { yaw = 0, pitch = 0 }
 local player = {
     player_unit = player_unit,
@@ -226,6 +243,7 @@ local smart_target_updates = 0
 local companion_can_order = false
 local companion_orders = {}
 local companion_unit = {}
+local companion_network_unit = {}
 local hud_camera_position = Vector3(0, 0, 0)
 local whistle_equipped = false
 local whistle_charged = false
@@ -284,6 +302,11 @@ Managers = {
                 end
             end,
         },
+        player_unit_spawn = {
+            owner = function(_, unit)
+                return (unit == companion_unit or unit == companion_network_unit) and player or nil
+            end,
+        },
     },
     event = {
         trigger = function(_, event_name, marker_name, unit, _, data)
@@ -321,6 +344,9 @@ ScriptUnit = {
                 }
             end
             if system == "ability_system" then return ability_extension end
+            if system == "first_person_system" then
+                return { _recoil_component = local_recoil_component }
+            end
             return {
                 read_component = function(_, name)
                     if name == "first_person" then
@@ -411,6 +437,7 @@ local function apply_delayed_hook(object_name, object, method)
     end
 end
 apply_delayed_hook("ActionInputParser", ActionInputParser, "_this_frames_inputs")
+apply_delayed_hook("ActionInputParser", ActionInputParser, "mispredict_happened")
 apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
     CLASS.PlayerUnitWeaponSpreadExtension, "randomized_spread")
 apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
@@ -436,8 +463,26 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
 assert(CLASS.PlayerUnitWeaponSpreadExtension.target_style_spread(
     { _unit = player_unit }, rotation
 ) == rotation, "no spread should return the unmodified pellet rotation")
+assert(randomized_spread_calls == 2 and target_style_spread_calls == 2,
+    "no spread must still advance Darktide's deterministic spread state")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, player_unit)
-assert(recoil_calls == 1, "no recoil should suppress generated recoil")
+assert(recoil_calls == 2,
+    "no recoil must preserve native recoil state for multiplayer prediction")
+local camera_pitch, camera_yaw = recoil_api.first_person_offset(
+    nil, local_recoil_component
+)
+assert(camera_pitch == 0 and camera_yaw == 0,
+    "no recoil should suppress only the local camera recoil offset")
+local remote_camera_pitch, remote_camera_yaw = recoil_api.first_person_offset(
+    nil, { pitch_offset = 0.3, yaw_offset = -0.1 }
+)
+assert(remote_camera_pitch == 0.3 and remote_camera_yaw == -0.1,
+    "no recoil must preserve non-local camera recoil on a multiplayer host")
+local weapon_pitch, weapon_yaw = recoil_api.weapon_offset(
+    nil, { pitch_offset = 0.4, yaw_offset = -0.2 }
+)
+assert(weapon_pitch == 0.4 and weapon_yaw == -0.2,
+    "no recoil must preserve the weapon offset used by multiplayer shot prediction")
 assert(orientation.yaw == weapon_orientation_yaw and orientation.pitch == weapon_orientation_pitch,
     "weapon suppression must never compensate through player orientation")
 local remote_weapon_unit = {}
@@ -445,7 +490,7 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
     { _unit = remote_weapon_unit }, rotation
 ).spread == rotation, "no spread must not alter remote weapon prediction")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, remote_weapon_unit)
-assert(recoil_calls == 2, "no recoil must not alter remote weapon prediction")
+assert(recoil_calls == 3, "no recoil must not alter remote weapon prediction")
 
 hooks["HudElementWorldMarkers.init"]({ _marker_templates = {} })
 local preexisting_unit = {}
@@ -609,7 +654,7 @@ local first_person_extension = {
         recoil_template = function() return {} end,
         action_input_is_currently_valid = function() return shot_ready end,
     },
-    _recoil_component = { pitch_offset = 0, yaw_offset = 0 },
+    _recoil_component = local_recoil_component,
     _movement_state_component = {},
     _locomotion_component = {},
     _inair_state_component = {},
@@ -622,8 +667,9 @@ local first_person_extension = {
         return y > 0
     end,
 }
+local recoil_reads_before_aim = recoil_offset_calls
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 0)
-assert(recoil_offset_calls == 0,
+assert(recoil_offset_calls == recoil_reads_before_aim,
     "aimbot should follow view orientation without compensating animated weapon recoil")
 
 local expected_yaw = math.atan2(8, 1.5) - math.pi * 0.5
@@ -808,7 +854,10 @@ assert(not parsed_fire_pressed,
     "semi-automatic repeat fire must not forge action_one_pressed inside Darktide's input parser")
 local weapon_parser = {
     _action_component_name = "weapon_action",
-    _action_component = { template = { action_inputs = weapon_action_inputs } },
+    _action_component = {
+        start_t = 1.0,
+        template = { action_inputs = weapon_action_inputs },
+    },
     _config_data = { action_extension = first_person_extension._weapon_extension },
     _last_fixed_frame = 11,
     _fixed_time_step = 0.1,
@@ -818,6 +867,23 @@ local weapon_inputs = ActionInputParser._this_frames_inputs(
 )
 assert(weapon_inputs.action_one_pressed,
     "ready semi-automatic fire should not require an aimbot target")
+weapon_inputs = ActionInputParser._this_frames_inputs(
+    weapon_parser, first_person_extension._input_extension
+)
+assert(not weapon_inputs.action_one_pressed,
+    "semi-automatic fire should queue only one press per acknowledged weapon action")
+ActionInputParser.mispredict_happened(weapon_parser)
+weapon_inputs = ActionInputParser._this_frames_inputs(
+    weapon_parser, first_person_extension._input_extension
+)
+assert(weapon_inputs.action_one_pressed,
+    "semi-automatic fire should restore its press after multiplayer prediction rollback")
+weapon_parser._action_component.start_t = 1.1
+weapon_inputs = ActionInputParser._this_frames_inputs(
+    weapon_parser, first_person_extension._input_extension
+)
+assert(weapon_inputs.action_one_pressed,
+    "semi-automatic fire should queue the next press after the weapon action advances")
 local remote_input_extension = {
     _is_local_unit = false,
     get = first_person_extension._input_extension.get,
@@ -851,8 +917,12 @@ shot_ready = true
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.3, 13)
 weapon_parser._last_fixed_frame = 13
 weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
+assert(not weapon_inputs.action_one_pressed,
+    "semi-automatic fire should wait for the previous press to advance the weapon action")
+weapon_parser._action_component.start_t = 1.2
+weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
 assert(weapon_inputs.action_one_pressed,
-    "semi-automatic fire should press again when the weapon is ready")
+    "semi-automatic fire should press again after the weapon action advances")
 
 weapon_action_inputs = {
     shoot_pressed = {
@@ -874,6 +944,7 @@ weapon_action_inputs = {
     },
 }
 weapon_parser._action_component.template.action_inputs = weapon_action_inputs
+weapon_parser._action_component.start_t = 1.3
 weapon_parser._last_fixed_frame = 15
 weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
 assert(weapon_inputs.action_one_pressed,
@@ -948,7 +1019,8 @@ assert(parsed_grenade_pressed_reads == whistle_reads_before,
 whistle_charged = true
 whistle_action_valid = false
 hooks["AttackReportManager.add_attack_result"](
-    {}, {}, companion_gunner, companion_unit, {}, nil, false, 10
+    {}, {}, companion_gunner, companion_network_unit, {}, nil, false, 10,
+    nil, "companion_dog"
 )
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.2, 32)
 assert(parsed_grenade_pressed_reads == whistle_reads_before,
@@ -1002,12 +1074,16 @@ local whistle_reads_before_attack = parsed_grenade_pressed_reads
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.23, 64)
 assert(parsed_grenade_pressed_reads == whistle_reads_before_attack,
     "automatic dog EMP must wait for confirmed dog attack damage")
-hooks["AttackReportManager.add_attack_result"](
-    {}, {}, companion_hound, companion_unit, {}, nil, false, 10
+BLACKBOARDS[companion_unit] = {
+    behavior = { move_state = "attacking" },
+    pounce = { has_pounce_started = true, pounce_target = companion_hound },
+}
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 6.235, 65
 )
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.24, 65)
 assert(parsed_grenade_pressed_reads == whistle_reads_before_attack + 2,
-    "automatic dog EMP should begin when the dog attack deals damage")
+    "automatic dog EMP should begin when the owned dog reaches its pounce target")
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 0.1, 1)
 assert(not last_grenade_hold,
     "a gameplay-time rewind must cancel an active automatic whistle hold")

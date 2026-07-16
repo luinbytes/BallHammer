@@ -1,6 +1,7 @@
 local mod = get_mod("BallHammer")
 local MarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerMarker")
 local HordeMarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerHordeMarker")
+local AttackSettings = require("scripts/settings/damage/attack_settings")
 local Recoil = require("scripts/utilities/recoil")
 local WeaponTemplate = require("scripts/utilities/weapon/weapon_template")
 
@@ -754,12 +755,44 @@ local function queue_auto_whistle(target_unit)
     end
 end
 
+local function is_local_companion_attack(attacking_unit, attack_type)
+    if companion_attackers[attacking_unit] then return true end
+    if attack_type ~= AttackSettings.attack_types.companion_dog then return false end
+
+    local spawn_manager = Managers.state and Managers.state.player_unit_spawn
+    local player = Managers.player and Managers.player:local_player(1)
+    if not spawn_manager or not player then return false end
+
+    local ok, owner = pcall(spawn_manager.owner, spawn_manager, attacking_unit)
+    return ok and (owner == player
+        or type(owner) == "table" and owner.player_unit == player.player_unit)
+end
+
+local function update_auto_whistle_from_companion_state(player_unit)
+    if not enable_auto_whistle or not companion_target or not BLACKBOARDS then return end
+
+    local spawner = ScriptUnit.has_extension(player_unit, "companion_spawner_system")
+    local companions = spawner and spawner:companion_units()
+    for i = 1, companions and #companions or 0 do
+        local companion_unit = companions[i]
+        local blackboard = BLACKBOARDS[companion_unit]
+        local pounce = blackboard and blackboard.pounce
+        local behavior = blackboard and blackboard.behavior
+        local attack_landed = pounce and (pounce.has_pounce_started
+            or (pounce.has_pounce_target and behavior and behavior.move_state == "attacking"))
+        if attack_landed and pounce.pounce_target == companion_target then
+            queue_auto_whistle(companion_target)
+            return
+        end
+    end
+end
+
 mod:hook_safe("AttackReportManager", "add_attack_result", function(
     self, damage_profile, attacked_unit, attacking_unit, attack_direction,
-    hit_world_position, hit_weakspot, damage
+    hit_world_position, hit_weakspot, damage, attack_result, attack_type
 )
     if damage and damage > 0 and attacked_unit == companion_target
-        and companion_attackers[attacking_unit] then
+        and is_local_companion_attack(attacking_unit, attack_type) then
         queue_auto_whistle(attacked_unit)
         if companion_waiting_for_damage then
             companion_waiting_for_damage = false
@@ -890,11 +923,19 @@ local function aim_at_position(player, first_person, target_position, dt, smooth
     player:set_orientation(yaw, pitch, 0)
 end
 
+local semi_auto_pressed_action_t = setmetatable({}, { __mode = "k" })
+
 local function repeat_semi_auto_input(parser, input_extension, inputs)
     if not enable_auto_fire or not input_extension._is_local_unit
-        or parser._action_component_name ~= "weapon_action"
-        or not inputs.action_one_hold
-        or inputs.action_one_pressed then return end
+        or parser._action_component_name ~= "weapon_action" then return end
+    if not inputs.action_one_hold then
+        semi_auto_pressed_action_t[parser] = nil
+        return
+    end
+    if inputs.action_one_pressed then return end
+
+    local action_start_t = parser._action_component.start_t
+    if action_start_t == nil or semi_auto_pressed_action_t[parser] == action_start_t then return end
 
     local weapon_template = WeaponTemplate.current_weapon_template(parser._action_component)
     local action_inputs = weapon_template and weapon_template.action_inputs
@@ -922,6 +963,7 @@ local function repeat_semi_auto_input(parser, input_extension, inputs)
         "weapon_action", action, "action_one_pressed", t
     ) then
         inputs.action_one_pressed = true
+        semi_auto_pressed_action_t[parser] = action_start_t
     end
 end
 
@@ -929,6 +971,11 @@ mod:hook("ActionInputParser", "_this_frames_inputs", function(func, self, input_
     local inputs = func(self, input_extension)
     repeat_semi_auto_input(self, input_extension, inputs)
     return inputs
+end)
+
+mod:hook("ActionInputParser", "mispredict_happened", function(func, self, ...)
+    semi_auto_pressed_action_t[self] = nil
+    return func(self, ...)
 end)
 
 local function suppress_local_spread(self)
@@ -939,25 +986,32 @@ end
 mod:hook("PlayerUnitWeaponSpreadExtension", "randomized_spread", function(
     func, self, current_rotation, ...
 )
-    if suppress_local_spread(self) then return current_rotation end
+    if suppress_local_spread(self) then
+        func(self, current_rotation, ...)
+        return current_rotation
+    end
     return func(self, current_rotation, ...)
 end)
 
 mod:hook("PlayerUnitWeaponSpreadExtension", "target_style_spread", function(
     func, self, current_rotation, ...
 )
-    if suppress_local_spread(self) then return current_rotation end
+    if suppress_local_spread(self) then
+        func(self, current_rotation, ...)
+        return current_rotation
+    end
     return func(self, current_rotation, ...)
 end)
 
-mod:hook(Recoil, "add_recoil", function(
-    func, t, recoil_template, recoil_component, recoil_control_component,
-    movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit
+mod:hook(Recoil, "first_person_offset", function(
+    func, recoil_template, read_recoil_component, ...
 )
     local player = Managers.player and Managers.player:local_player(1)
-    if enable_no_recoil and player and unit == player.player_unit then return end
-    return func(t, recoil_template, recoil_component, recoil_control_component,
-        movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit)
+    local first_person = player and player.player_unit
+        and ScriptUnit.has_extension(player.player_unit, "first_person_system")
+    if enable_no_recoil and first_person
+        and read_recoil_component == first_person._recoil_component then return 0, 0 end
+    return func(recoil_template, read_recoil_component, ...)
 end)
 
 mod:hook(CLASS.PlayerUnitInputExtension, "get", function(func, self, action, ...)
@@ -1029,6 +1083,7 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     local physics_world = World.physics_world(self._world)
     local visibility_origin = player_camera_position(player, first_person.position)
     update_companion_target(unit, visibility_origin, physics_world, t)
+    update_auto_whistle_from_companion_state(unit)
 
     if not activation_is_held(aim_activation, aimbot_held, self._input_extension) then
         clear_aim_lock()
