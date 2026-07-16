@@ -27,7 +27,13 @@ return {
     aim_smoothness = { en = "Aim Smoothness" },
     aim_curve = { en = "Aim Curve" },
 
+    weapon_settings = { en = "Weapon" },
+    enable_auto_fire = { en = "Automatic Semi-Auto Fire" },
+    enable_no_recoil = { en = "No Recoil" },
+    enable_no_spread = { en = "No Spread" },
+
     companion_settings = { en = "Companion" },
     enable_companion_target = { en = "Auto-Target Specials" },
     companion_distance = { en = "Auto-Target Distance (m)" },
+    enable_auto_whistle = { en = "Auto-Use Dog EMP" },
 }

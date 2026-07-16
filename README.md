@@ -16,8 +16,9 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Immediate target replacement when the lock dies or becomes occluded
 - Head or torso aim, configurable distance and field of view, interpolated smoothing, and aim curvature
 - Left mouse, right mouse, either mouse button, or a custom keyboard activation key
-- Timed repeat fire for press-driven, non-automatic weapons while mouse one is held and the aimbot has a valid target
-- Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; normal retargeting waits for companion damage, and a charged Arbites dog EMP fires once when the dog connects
+- Optional timed repeat fire for press-driven, non-automatic weapons whenever mouse one is held
+- Optional local weapon recoil and spread suppression without camera compensation
+- Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; normal retargeting waits for companion damage, with an optional charged Arbites dog EMP when the dog connects
 
 Triggerbot and rage modes are not included. BallHammer uses one predictable normal-aim path.
 

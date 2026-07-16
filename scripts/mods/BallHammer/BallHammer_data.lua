@@ -122,6 +122,27 @@ return {
                 },
             },
             {
+                setting_id = "weapon_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "enable_auto_fire",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                    {
+                        setting_id = "enable_no_recoil",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "enable_no_spread",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                },
+            },
+            {
                 setting_id = "companion_settings",
                 type = "group",
                 sub_widgets = {
@@ -136,6 +157,11 @@ return {
                         default_value = 60,
                         range = { 10, 120 },
                         decimals_number = 0,
+                    },
+                    {
+                        setting_id = "enable_auto_whistle",
+                        type = "checkbox",
+                        default_value = false,
                     },
                 },
             },

@@ -101,13 +101,20 @@ local settings = {
     aim_curve = 20,
     aim_location = "head",
     aim_activation = "left_mouse",
+    enable_auto_fire = true,
+    enable_no_recoil = false,
+    enable_no_spread = false,
     enable_companion_target = false,
     companion_distance = 60,
+    enable_auto_whistle = false,
 }
 local messages = {}
 local hooks = {}
 local parsed_fire_pressed = false
 local parsed_grenade_pressed_reads = 0
+local whistle_aim_started_t = nil
+local whistle_activations = 0
+local last_grenade_hold = false
 local action_input_update_error = false
 local shot_ready = false
 local recoil_calls = 0
@@ -171,15 +178,25 @@ CLASS = {
     OutlineSystem = {},
     PlayerUnitInputExtension = { get = function() return false end },
     PlayerUnitActionInputExtension = {
-        fixed_update = function()
+        fixed_update = function(_, _, _, t)
             if action_input_update_error then error("action input update failed") end
             local input = { _is_local_unit = true }
             parsed_fire_pressed = CLASS.PlayerUnitInputExtension.get(input, "action_one_pressed")
+            CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_hold")
             if CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_pressed") then
                 parsed_grenade_pressed_reads = parsed_grenade_pressed_reads + 1
             end
-            if CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_pressed") then
+            local ability_hold = CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_hold")
+            last_grenade_hold = ability_hold
+            local ability_pressed = CLASS.PlayerUnitInputExtension.get(input, "grenade_ability_pressed")
+            if ability_pressed then
                 parsed_grenade_pressed_reads = parsed_grenade_pressed_reads + 1
+            end
+            if ability_pressed and ability_hold then
+                whistle_aim_started_t = t
+            elseif whistle_aim_started_t and not ability_hold and t - whistle_aim_started_t >= 0.075 then
+                whistle_aim_started_t = nil
+                whistle_activations = whistle_activations + 1
             end
         end,
     },
@@ -376,12 +393,19 @@ PhysicsWorld = {
 }
 
 dofile("scripts/mods/BallHammer/BallHammer.lua")
-local delayed_parser_hook = hooks["delayed.ActionInputParser._this_frames_inputs"]
-assert(delayed_parser_hook, "the parser hook should be deferred until Darktide registers its class")
-local original_parser_inputs = ActionInputParser._this_frames_inputs
-ActionInputParser._this_frames_inputs = function(...)
-    return delayed_parser_hook(original_parser_inputs, ...)
+local function apply_delayed_hook(object_name, object, method)
+    local handler = hooks["delayed." .. object_name .. "." .. method]
+    assert(handler, object_name .. "." .. method .. " should use DMF's deferred hook path")
+    local original = object[method]
+    object[method] = function(...)
+        return handler(original, ...)
+    end
 end
+apply_delayed_hook("ActionInputParser", ActionInputParser, "_this_frames_inputs")
+apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
+    CLASS.PlayerUnitWeaponSpreadExtension, "randomized_spread")
+apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
+    CLASS.PlayerUnitWeaponSpreadExtension, "target_style_spread")
 assert(messages[#messages] == "Loaded! - By @luinbytes",
     "load banner should use the requested credit")
 
@@ -392,6 +416,27 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.target_style_spread({ _unit = playe
     "BallHammer should not override pellet spread")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, player_unit)
 assert(recoil_calls == 1, "BallHammer should not override weapon recoil")
+settings.enable_no_recoil = true
+settings.enable_no_spread = true
+mod.on_setting_changed("enable_no_recoil")
+mod.on_setting_changed("enable_no_spread")
+local weapon_orientation_yaw, weapon_orientation_pitch = orientation.yaw, orientation.pitch
+assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
+    { _unit = player_unit }, rotation
+) == rotation, "no spread should return the unmodified shot rotation")
+assert(CLASS.PlayerUnitWeaponSpreadExtension.target_style_spread(
+    { _unit = player_unit }, rotation
+) == rotation, "no spread should return the unmodified pellet rotation")
+recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, player_unit)
+assert(recoil_calls == 1, "no recoil should suppress generated recoil")
+assert(orientation.yaw == weapon_orientation_yaw and orientation.pitch == weapon_orientation_pitch,
+    "weapon suppression must never compensate through player orientation")
+local remote_weapon_unit = {}
+assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
+    { _unit = remote_weapon_unit }, rotation
+).spread == rotation, "no spread must not alter remote weapon prediction")
+recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, remote_weapon_unit)
+assert(recoil_calls == 2, "no recoil must not alter remote weapon prediction")
 
 hooks["HudElementWorldMarkers.init"]({ _marker_templates = {} })
 local preexisting_unit = {}
@@ -746,9 +791,10 @@ assert(orientation.yaw < 0, "either-mouse activation should accept right mouse")
 
 settings.aim_activation = "left_mouse"
 mod.on_setting_changed("aim_activation")
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.05, 10)
 held_action = "action_one_hold"
 shot_ready = true
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.1, 11)
 assert(not parsed_fire_pressed,
     "semi-automatic repeat fire must not forge action_one_pressed inside Darktide's input parser")
 local weapon_parser = {
@@ -762,7 +808,7 @@ local weapon_inputs = ActionInputParser._this_frames_inputs(
     weapon_parser, first_person_extension._input_extension
 )
 assert(weapon_inputs.action_one_pressed,
-    "ready semi-automatic fire should be repeated only inside the weapon parser")
+    "ready semi-automatic fire should not require an aimbot target")
 local remote_input_extension = {
     _is_local_unit = false,
     get = first_person_extension._input_extension.get,
@@ -770,6 +816,13 @@ local remote_input_extension = {
 weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, remote_input_extension)
 assert(not weapon_inputs.action_one_pressed,
     "semi-automatic repeat fire must never alter a remote player's predicted input")
+settings.enable_auto_fire = false
+mod.on_setting_changed("enable_auto_fire")
+weapon_inputs = ActionInputParser._this_frames_inputs(weapon_parser, first_person_extension._input_extension)
+assert(not weapon_inputs.action_one_pressed,
+    "semi-automatic repeat fire should respect its independent weapon setting")
+settings.enable_auto_fire = true
+mod.on_setting_changed("enable_auto_fire")
 local ability_inputs = ActionInputParser._this_frames_inputs({
     _action_component_name = "grenade_ability_action",
     _action_component = { template_name = "adamant_grenade" },
@@ -875,6 +928,8 @@ CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.1, 31)
 assert(parsed_grenade_pressed_reads == whistle_reads_before,
     "companion damage must not auto-use a different Arbites grenade ability")
 whistle_equipped = true
+settings.enable_auto_whistle = true
+mod.on_setting_changed("enable_auto_whistle")
 hooks["AttackReportManager.add_attack_result"](
     {}, {}, companion_gunner, companion_unit, {}, nil, false, 10
 )
@@ -901,12 +956,17 @@ action_input_update_error = false
 CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.21, 33)
 assert(parsed_grenade_pressed_reads == whistle_reads_before + 2,
     "a charged Arbites whistle should reach weapon and ability parsers once when the dog attacks")
-CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.22, 34)
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.26, 34)
 assert(parsed_grenade_pressed_reads == whistle_reads_before + 2,
     "the dog EMP should not repeat for the same attacked target")
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 3.30, 35)
+assert(whistle_activations == 1,
+    "automatic dog EMP must complete Darktide's native press, hold, and release sequence")
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 3.2, 32)
 assert(companion_orders[2] and companion_orders[2].target == companion_hound,
     "companion damage should unlock a switch to a more dangerous target")
+settings.enable_auto_whistle = false
+mod.on_setting_changed("enable_auto_whistle")
 units[companion_hound].position = Vector3(8, 50, 0)
 units[companion_hound].health = 1
 units[companion_gunner].position = Vector3(2, 5, 0)
@@ -920,6 +980,28 @@ HEALTH_ALIVE[companion_gunner] = false
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 6.22, 63)
 assert(companion_orders[4] and companion_orders[4].target == companion_hound,
     "a dead commanded target should unlock an immediate replacement")
+local disabled_whistle_activations = whistle_activations
+hooks["AttackReportManager.add_attack_result"](
+    {}, {}, companion_hound, companion_unit, {}, nil, false, 10
+)
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.23, 64)
+assert(whistle_activations == disabled_whistle_activations,
+    "automatic dog EMP should respect its independent companion setting")
+settings.enable_auto_whistle = true
+mod.on_setting_changed("enable_auto_whistle")
+local whistle_reads_before_attack = parsed_grenade_pressed_reads
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.23, 64)
+assert(parsed_grenade_pressed_reads == whistle_reads_before_attack,
+    "automatic dog EMP must wait for confirmed dog attack damage")
+hooks["AttackReportManager.add_attack_result"](
+    {}, {}, companion_hound, companion_unit, {}, nil, false, 10
+)
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 6.24, 65)
+assert(parsed_grenade_pressed_reads == whistle_reads_before_attack + 2,
+    "automatic dog EMP should begin when the dog attack deals damage")
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 0.1, 1)
+assert(not last_grenade_hold,
+    "a gameplay-time rewind must cancel an active automatic whistle hold")
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 held_action = "action_one_hold"

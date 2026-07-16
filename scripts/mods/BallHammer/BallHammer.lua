@@ -1,6 +1,7 @@
 local mod = get_mod("BallHammer")
 local MarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerMarker")
 local HordeMarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerHordeMarker")
+local Recoil = require("scripts/utilities/recoil")
 local WeaponTemplate = require("scripts/utilities/weapon/weapon_template")
 
 local BREED_DATA = {
@@ -94,10 +95,14 @@ local aim_smoothness    = 55
 local aim_curve         = 20
 local aim_location      = "head"
 local aim_activation    = "left_mouse"
+local enable_auto_fire  = true
+local enable_no_recoil  = false
+local enable_no_spread  = false
 local locked_target      = nil
 local locked_position    = nil
 local enable_companion_target = true
 local companion_distance = 60
+local enable_auto_whistle = false
 local companion_target = nil
 local companion_next_scan_t = 0
 local companion_waiting_for_damage = false
@@ -105,7 +110,8 @@ local companion_wait_deadline_t = 0
 local companion_attackers = {}
 local auto_whistle_pending_target = nil
 local auto_whistle_used_target = nil
-local auto_whistle_input_window = false
+local auto_whistle_hold_until = nil
+local auto_whistle_input_phase = nil
 local next_smart_target_refresh_t = 0
 
 mod.get_unit_data         = function(unit) return unit_data_map[unit] end
@@ -140,8 +146,12 @@ local function refresh_settings()
     aim_curve         = mod:get("aim_curve")
     aim_location      = mod:get("aim_location")
     aim_activation    = mod:get("aim_activation")
+    enable_auto_fire  = mod:get("enable_auto_fire")
+    enable_no_recoil  = mod:get("enable_no_recoil")
+    enable_no_spread  = mod:get("enable_no_spread")
     enable_companion_target = mod:get("enable_companion_target")
     companion_distance = mod:get("companion_distance")
+    enable_auto_whistle = mod:get("enable_auto_whistle")
     refresh_marker_aim_node()
 end
 
@@ -311,14 +321,29 @@ mod.on_setting_changed = function(setting_id)
         return
     end
 
-    if setting_id == "enable_companion_target" or setting_id == "companion_distance" then
+    if setting_id == "enable_auto_fire" or setting_id == "enable_no_recoil"
+        or setting_id == "enable_no_spread" then
+        enable_auto_fire = mod:get("enable_auto_fire")
+        enable_no_recoil = mod:get("enable_no_recoil")
+        enable_no_spread = mod:get("enable_no_spread")
+        return
+    end
+
+    if setting_id == "enable_companion_target" or setting_id == "companion_distance"
+        or setting_id == "enable_auto_whistle" then
         enable_companion_target = mod:get("enable_companion_target")
         companion_distance = mod:get("companion_distance")
+        enable_auto_whistle = mod:get("enable_auto_whistle")
         if not enable_companion_target then
             companion_target = nil
             companion_waiting_for_damage = false
             companion_wait_deadline_t = 0
             table.clear(companion_attackers)
+        end
+        if not enable_companion_target or not enable_auto_whistle then
+            auto_whistle_pending_target = nil
+            auto_whistle_used_target = nil
+            auto_whistle_hold_until = nil
         end
         return
     end
@@ -610,7 +635,8 @@ local function update_companion_target(player_unit, origin, physics_world, t)
         companion_next_scan_t = 0
         table.clear(companion_attackers)
     end
-    if auto_whistle_pending_target and (not HEALTH_ALIVE or not HEALTH_ALIVE[auto_whistle_pending_target]) then
+    if auto_whistle_pending_target and not auto_whistle_hold_until
+        and (not HEALTH_ALIVE or not HEALTH_ALIVE[auto_whistle_pending_target]) then
         auto_whistle_pending_target = nil
     end
     if auto_whistle_used_target and (not HEALTH_ALIVE or not HEALTH_ALIVE[auto_whistle_used_target]) then
@@ -692,7 +718,8 @@ local function update_companion_target(player_unit, origin, physics_world, t)
 end
 
 local function queue_auto_whistle(target_unit)
-    if target_unit == auto_whistle_used_target or target_unit == auto_whistle_pending_target then return end
+    if not enable_auto_whistle or target_unit == auto_whistle_used_target
+        or target_unit == auto_whistle_pending_target then return end
     local player = Managers.player and Managers.player:local_player(1)
     local player_unit = player and player.player_unit
     local ability = player_unit and ScriptUnit.has_extension(player_unit, "ability_system")
@@ -839,10 +866,10 @@ local function aim_at_position(player, first_person, target_position, dt, smooth
 end
 
 local function repeat_semi_auto_input(parser, input_extension, inputs)
-    if not input_extension._is_local_unit or parser._action_component_name ~= "weapon_action"
+    if not enable_auto_fire or not input_extension._is_local_unit
+        or parser._action_component_name ~= "weapon_action"
         or not inputs.action_one_hold
-        or inputs.action_one_pressed or not locked_target
-        or not HEALTH_ALIVE or not HEALTH_ALIVE[locked_target] then return end
+        or inputs.action_one_pressed then return end
 
     local weapon_template = WeaponTemplate.current_weapon_template(parser._action_component)
     local action_inputs = weapon_template and weapon_template.action_inputs
@@ -879,9 +906,40 @@ mod:hook("ActionInputParser", "_this_frames_inputs", function(func, self, input_
     return inputs
 end)
 
+local function suppress_local_spread(self)
+    local player = Managers.player and Managers.player:local_player(1)
+    return enable_no_spread and player and self._unit == player.player_unit
+end
+
+mod:hook("PlayerUnitWeaponSpreadExtension", "randomized_spread", function(
+    func, self, current_rotation, ...
+)
+    if suppress_local_spread(self) then return current_rotation end
+    return func(self, current_rotation, ...)
+end)
+
+mod:hook("PlayerUnitWeaponSpreadExtension", "target_style_spread", function(
+    func, self, current_rotation, ...
+)
+    if suppress_local_spread(self) then return current_rotation end
+    return func(self, current_rotation, ...)
+end)
+
+mod:hook(Recoil, "add_recoil", function(
+    func, t, recoil_template, recoil_component, recoil_control_component,
+    movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit
+)
+    local player = Managers.player and Managers.player:local_player(1)
+    if enable_no_recoil and player and unit == player.player_unit then return end
+    return func(t, recoil_template, recoil_component, recoil_control_component,
+        movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit)
+end)
+
 mod:hook(CLASS.PlayerUnitInputExtension, "get", function(func, self, action, ...)
-    if auto_whistle_input_window and self._is_local_unit
-        and action == "grenade_ability_pressed" then return true end
+    if auto_whistle_input_phase and self._is_local_unit then
+        if action == "grenade_ability_pressed" then return auto_whistle_input_phase == "press" end
+        if action == "grenade_ability_hold" then return auto_whistle_input_phase ~= "release" end
+    end
     return func(self, action, ...)
 end)
 
@@ -891,25 +949,41 @@ mod:hook(CLASS.PlayerUnitActionInputExtension, "fixed_update", function(func, se
     if not player or unit ~= player.player_unit or not target then
         return func(self, unit, dt, t, fixed_frame)
     end
-    if not HEALTH_ALIVE or not HEALTH_ALIVE[target] then
+    if not auto_whistle_hold_until and (not HEALTH_ALIVE or not HEALTH_ALIVE[target]) then
         auto_whistle_pending_target = nil
         return func(self, unit, dt, t, fixed_frame)
     end
+    if auto_whistle_hold_until and t < auto_whistle_hold_until - 1 then
+        auto_whistle_pending_target = nil
+        auto_whistle_hold_until = nil
+        return func(self, unit, dt, t, fixed_frame)
+    end
 
-    local ability = ScriptUnit.has_extension(unit, "ability_system")
-    local can_whistle = ability and ability:get_current_grenade_ability_name() == "adamant_whistle"
-        and ability:can_use_ability("grenade_ability")
-        and ability:action_input_is_currently_valid(
-            "grenade_ability_action", "aim_pressed", "grenade_ability_pressed", t
-        )
-    if not can_whistle then return func(self, unit, dt, t, fixed_frame) end
+    local phase
+    if auto_whistle_hold_until then
+        phase = t >= auto_whistle_hold_until and "release" or "hold"
+    else
+        local ability = ScriptUnit.has_extension(unit, "ability_system")
+        local can_whistle = ability and ability:get_current_grenade_ability_name() == "adamant_whistle"
+            and ability:can_use_ability("grenade_ability")
+            and ability:action_input_is_currently_valid(
+                "grenade_ability_action", "aim_pressed", "grenade_ability_pressed", t
+            )
+        if not can_whistle then return func(self, unit, dt, t, fixed_frame) end
+        phase = "press"
+    end
 
-    auto_whistle_input_window = true
+    auto_whistle_input_phase = phase
     local ok, err = pcall(func, self, unit, dt, t, fixed_frame)
-    auto_whistle_input_window = false
+    auto_whistle_input_phase = nil
     if not ok then error(err) end
-    auto_whistle_pending_target = nil
-    auto_whistle_used_target = target
+    if phase == "press" then
+        auto_whistle_hold_until = t + 0.08
+    elseif phase == "release" then
+        auto_whistle_pending_target = nil
+        auto_whistle_used_target = target
+        auto_whistle_hold_until = nil
+    end
 end)
 
 mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, unit, dt, t, frame)
