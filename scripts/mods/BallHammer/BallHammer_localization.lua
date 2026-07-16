@@ -1,6 +1,6 @@
 return {
     mod_name = { en = "BallHammer" },
-    mod_description = { en = "Perkaholic-style ESP, aimbot, and weapon controls for all enemies" },
+    mod_description = { en = "All-enemy ESP with persistent, visibility-aware normal aim" },
 
     esp_settings = { en = "ESP" },
     enable_outlines = { en = "Enemy Outlines" },
@@ -26,16 +26,4 @@ return {
     aim_fov = { en = "Aim Field of View (degrees)" },
     aim_smoothness = { en = "Aim Smoothness" },
     aim_curve = { en = "Aim Curve" },
-
-    triggerbot_settings = { en = "Magnet Triggerbot" },
-    trigger_activation = { en = "Trigger Activation" },
-    trigger_key = { en = "Custom Trigger Key (keyboard only)" },
-    trigger_fov = { en = "Magnet Field of View (degrees)" },
-    trigger_fire_fov = { en = "Fire Radius (degrees)" },
-    trigger_smoothness = { en = "Magnet Smoothness" },
-
-    rage_settings = { en = "Rage Mode" },
-    rage_key = { en = "Hold Rage Key" },
-    rage_distance = { en = "Rage Distance (m)" },
-    rage_smoothness = { en = "Rage Smoothness" },
 }

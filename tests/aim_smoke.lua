@@ -101,15 +101,11 @@ local settings = {
     aim_curve = 20,
     aim_location = "head",
     aim_activation = "left_mouse",
-    trigger_activation = "off",
-    trigger_fov = 5,
-    trigger_fire_fov = 0.8,
-    trigger_smoothness = 35,
-    rage_distance = 120,
-    rage_smoothness = 10,
 }
 local messages = {}
 local hooks = {}
+local parsed_fire_pressed = false
+local shot_ready = false
 local recoil_calls = 0
 local recoil_offset_calls = 0
 local recoil_api = {
@@ -152,6 +148,13 @@ CLASS = {
     },
     OutlineSystem = {},
     PlayerUnitInputExtension = { get = function() return false end },
+    PlayerUnitActionInputExtension = {
+        fixed_update = function()
+            parsed_fire_pressed = CLASS.PlayerUnitInputExtension.get(
+                { _is_local_unit = true }, "action_one_pressed"
+            )
+        end,
+    },
     PlayerUnitWeaponSpreadExtension = {
         randomized_spread = function(_, rotation) return { spread = rotation } end,
         target_style_spread = function(_, rotation) return { spread = rotation } end,
@@ -172,6 +175,11 @@ local player = {
 local marker_events = {}
 local held_action = "action_one_hold"
 local preexisting_units = {}
+local weapon_action_inputs = {
+    shoot_pressed = {
+        input_sequence = { { input = "action_one_pressed", value = true } },
+    },
+}
 Managers = {
     player = { local_player = function() return player end },
     input = {
@@ -205,35 +213,16 @@ Managers = {
 
 local units = {}
 local camera_rotation = Vector3(0, 1, 0)
-local queued_weapon_actions = {}
-local action_input_extension = {
-    bot_queue_action_input = function(_, component, action)
-        queued_weapon_actions[#queued_weapon_actions + 1] = { component = component, action = action }
-        return #queued_weapon_actions
-    end,
-    bot_queue_request_is_consumed = function() return true end,
-}
 ScriptUnit = {
     has_extension = function(unit, system)
         if unit == player_unit then
-            if system == "action_input_system" then return action_input_extension end
             return {
                 read_component = function(_, name)
                     if name == "first_person" then
                         return { position = Vector3(0, 0, 0), rotation = camera_rotation }
                     end
                     if name == "weapon_action" then
-                        return { template = { action_inputs = {
-                            shoot_pressed = {
-                                input_sequence = { { input = "action_one_pressed", value = true } },
-                            },
-                            zoom_shoot = {
-                                input_sequence = { { input = "action_one_hold", value = true } },
-                            },
-                            shoot_release = {
-                                input_sequence = { { input = "action_one_hold", value = false } },
-                            },
-                        } } }
+                        return { template = { action_inputs = weapon_action_inputs } }
                     end
                     return { yaw_offset = 0, pitch_offset = 0, offset_x = 0, offset_y = 0 }
                 end,
@@ -454,7 +443,7 @@ local first_person_extension = {
     _world = gameplay_world,
     _weapon_extension = {
         recoil_template = function() return {} end,
-        action_input_is_currently_valid = function() return true end,
+        action_input_is_currently_valid = function() return shot_ready end,
     },
     _recoil_component = { pitch_offset = 0, yaw_offset = 0 },
     _movement_state_component = {},
@@ -528,7 +517,7 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, pla
 
 local lock_left, lock_right = {}, {}
 units[lock_left] = { breed = "renegade_sniper", position = Vector3(4, 20, 0), mixed_vector = true }
-units[lock_right] = { breed = "renegade_sniper", position = Vector3(6, 20, 0) }
+units[lock_right] = { breed = "renegade_sniper", position = Vector3(20, 10, 0) }
 HEALTH_ALIVE[lock_left], HEALTH_ALIVE[lock_right] = true, true
 hooks["HealthExtension.init"](nil, nil, lock_left)
 hooks["HealthExtension.init"](nil, nil, lock_right)
@@ -540,41 +529,42 @@ held_action = "action_two_hold"
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 4)
 assert(orientation.yaw < 0, "initial acquisition should select the target nearest the crosshair")
 last_constructed._valid = false
-camera_rotation = Vector3.normalize(Vector3(6, 20, 0))
+camera_rotation = Vector3.normalize(Vector3(20, 10, 0))
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 5)
 local left_yaw = math.atan2(20, 4) - math.pi * 0.5
-local right_yaw = math.atan2(20, 6) - math.pi * 0.5
+local right_yaw = math.atan2(10, 20) - math.pi * 0.5
 assert(math.abs(orientation.yaw - left_yaw) < math.abs(orientation.yaw - right_yaw),
-    "tiny crosshair movement should not switch a live locked target")
+    "normal aim should keep its live target even after the crosshair leaves acquisition FOV")
+
+local swap_target = {}
+units[swap_target] = { breed = "renegade_sniper", position = Vector3(6, 20, 0) }
+HEALTH_ALIVE[swap_target] = true
+hooks["HealthExtension.init"](nil, nil, swap_target)
+HEALTH_ALIVE[lock_right] = false
+units[lock_left].position = Vector3(1, 20, 0)
+camera_rotation = Vector3.normalize(Vector3(6, 20, 0))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.1, 5.1)
+local swap_yaw = math.atan2(20, 6) - math.pi * 0.5
+assert(math.abs(orientation.yaw - swap_yaw) < math.abs(orientation.yaw - left_yaw),
+    "an occluded locked target should swap cleanly to the nearest visible target")
+
+local death_target = {}
+units[death_target] = { breed = "renegade_sniper", position = Vector3(8, 20, 0) }
+HEALTH_ALIVE[death_target] = true
+hooks["HealthExtension.init"](nil, nil, death_target)
+HEALTH_ALIVE[swap_target] = false
+camera_rotation = Vector3.normalize(Vector3(8, 20, 0))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.2, 5.2)
+local death_yaw = math.atan2(20, 8) - math.pi * 0.5
+assert(math.abs(orientation.yaw - death_yaw) < math.abs(orientation.yaw - swap_yaw),
+    "a dead locked target should swap cleanly to the nearest visible target")
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
-local trigger_target = {}
-units[trigger_target] = { breed = "renegade_sniper", position = Vector3(4, 20, 0) }
-HEALTH_ALIVE[trigger_target] = true
-hooks["HealthExtension.init"](nil, nil, trigger_target)
-settings.aim_activation = "off"
-settings.trigger_activation = "custom"
-settings.trigger_fov = 30
-settings.trigger_smoothness = 0
-mod.on_setting_changed("aim_activation")
-mod.on_setting_changed("trigger_activation")
-mod.on_setting_changed("trigger_fov")
-mod.on_setting_changed("trigger_smoothness")
-mod.triggerbot_held(true)
-camera_rotation = Vector3.normalize(Vector3(4, 20, 0))
-orientation.yaw, orientation.pitch = left_yaw, 0
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.6, 6)
-assert(queued_weapon_actions[1] and queued_weapon_actions[1].component == "weapon_action" and
-    queued_weapon_actions[1].action == "zoom_shoot",
-    "magnet triggerbot should queue a valid Darktide weapon action")
-mod.triggerbot_held(false)
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.7, 7)
-assert(queued_weapon_actions[2] and queued_weapon_actions[2].action == "shoot_release",
-    "magnet triggerbot should release a held Darktide fire action with its activation key")
-
-settings.trigger_activation = "off"
+local activation_target = {}
+units[activation_target] = { breed = "renegade_sniper", position = Vector3(4, 20, 0) }
+HEALTH_ALIVE[activation_target] = true
+hooks["HealthExtension.init"](nil, nil, activation_target)
 settings.aim_activation = "both_mouse"
-mod.on_setting_changed("trigger_activation")
 mod.on_setting_changed("aim_activation")
 orientation.yaw, orientation.pitch = 0, 0
 held_action = "action_one_hold"
@@ -587,50 +577,38 @@ held_action = "action_two_hold"
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.0, 10)
 assert(orientation.yaw < 0, "either-mouse activation should accept right mouse")
 
-for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
-local rage_grunt, rage_special = {}, {}
-units[rage_grunt] = {
-    breed_data = { name = "renegade_rifleman", tags = { minion = true, roamer = true } },
-    position = Vector3(2, 10, 0),
-}
-units[rage_special] = {
-    breed_data = {
-        name = "renegade_sniper",
-        smart_tag_target_type = "breed",
-        tags = { minion = true, special = true },
-    },
-    position = Vector3(6, 20, 0),
-}
-HEALTH_ALIVE[rage_grunt], HEALTH_ALIVE[rage_special] = true, true
-hooks["HealthExtension.init"](nil, nil, rage_grunt)
-hooks["HealthExtension.init"](nil, nil, rage_special)
-settings.aim_activation = "off"
-settings.aim_fov = 5
-settings.rage_smoothness = 0
-mod.on_setting_changed("aim_activation")
-mod.on_setting_changed("aim_fov")
-mod.on_setting_changed("rage_smoothness")
-held_action = nil
-mod.rage_held(true)
-table.clear(queued_weapon_actions)
-camera_rotation = Vector3(0, 1, 0)
-orientation.yaw, orientation.pitch = 0, 0
-for frame = 11, 15 do
-    hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, frame * 0.1, frame)
-end
-assert(orientation.yaw < -0.22,
-    "rage should prefer the dangerous on-screen special even outside the configured aim FOV")
-assert(queued_weapon_actions[1] and queued_weapon_actions[1].action == "shoot_pressed",
-    "rage should fire through Darktide's weapon-action queue after converging")
-mod.rage_held(false)
 settings.aim_activation = "left_mouse"
 mod.on_setting_changed("aim_activation")
-local released_yaw = orientation.yaw
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.6, 16)
-assert(orientation.yaw == released_yaw,
-    "generated rage fire should not feed back into left-mouse aimbot activation")
-local rage_actions = #queued_weapon_actions
-assert(rage_actions > 0, "rage should have queued at least one valid weapon action")
+held_action = "action_one_hold"
+shot_ready = true
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.1, 11)
+local remote_unit = {}
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, remote_unit, 0.1, 1.1, 11)
+assert(not parsed_fire_pressed,
+    "another player's input update should not consume the local synthetic shot")
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 1.1, 11)
+assert(parsed_fire_pressed, "holding mouse one should fire a ready semi-automatic weapon")
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 1.11, 11)
+assert(not parsed_fire_pressed, "semi-automatic fire should emit one press per ready shot")
+shot_ready = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.2, 12)
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 1.2, 12)
+assert(not parsed_fire_pressed, "semi-automatic fire should wait for Darktide's action timing")
+shot_ready = true
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.3, 13)
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 1.3, 13)
+assert(parsed_fire_pressed, "semi-automatic fire should press again when the weapon is ready")
+
+weapon_action_inputs = {
+    shoot_pressed = {
+        input_sequence = { { input = "action_one_hold", value = true } },
+    },
+}
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.4, 14)
+CLASS.PlayerUnitActionInputExtension.fixed_update({}, player_unit, 0.1, 1.4, 14)
+assert(not parsed_fire_pressed,
+    "holding mouse one should not inject presses for an automatic fire action")
+
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 held_action = "action_one_hold"
 local no_target_ok, no_target_error = pcall(

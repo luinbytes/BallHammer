@@ -7,7 +7,7 @@ local ACCENT = { 255, 255, 158, 181 }
 local TEXT = { 255, 224, 224, 229 }
 
 template.name = "ballhammer_marker"
-template.unit_node = "root_point"
+template.unit_node = "j_head"
 template.size = { 1, 1 }
 template.check_line_of_sight = true
 template.max_distance = 999

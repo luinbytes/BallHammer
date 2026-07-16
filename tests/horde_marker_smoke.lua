@@ -53,6 +53,7 @@ local parent = {
 
 local template = dofile("scripts/mods/BallHammer/BallHammerHordeMarker.lua")
 assert(template.check_line_of_sight, "horde ESP should request Darktide's native visibility raycast")
+assert(template.unit_node == "j_head", "horde visibility should raycast to the head instead of the floor")
 local function widget_at(x)
     local definition = template.create_widget_defintion(template, "pivot")
     local styles = {}
@@ -88,21 +89,45 @@ for i = 1, 4 do
     template.on_enter(marker.widget, marker)
 end
 
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 0.7)
+assert(markers[1].widget.content.draw_box and not markers[1].widget.content.draw_dot,
+    "a first-time horde join should begin from the member box")
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[2].widget, markers[2], nil, nil, 0.7)
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 0.7)
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 1)
 assert(markers[1].widget.content.label == "Horde x4",
     "a member just outside the screen should remain in the buffered horde count")
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[2].widget, markers[2], nil, nil, 1)
 assert(markers[2].widget.style.dot.offset[2] == -90,
     "horde dots should use the configured head bone instead of the root below the feet")
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 1)
 markers[1].raycast_initialized = true
 markers[1].raycast_result = false
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 1.5)
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 1.5)
 assert(markers[1].widget.style.top.color[2] == 255 and markers[1].widget.style.top.color[3] == 255 and
     markers[1].widget.style.top.color[4] == 255 and markers[1].widget.style.dot.color[3] == 255,
     "visible horde ESP should render white")
 
+units[markers[4].unit].body.x = 20
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 1.516)
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 1.516)
+assert(markers[1].widget.content.label == "Horde x3",
+    "horde count should decrease after a member leaves the world-space group")
+assert(markers[4].widget.content.draw_box and markers[4].widget.content.draw_dot,
+    "a splitting member should expand its box while its horde dot fades")
+local splitting_alpha = markers[4].widget.style.top.color[1]
+
+units[markers[4].unit].body.x = 3
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 1.532)
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 1.532)
+assert(markers[4].widget.style.top.color[1] < splitting_alpha,
+    "a mid-animation rejoin should reverse the existing transition without racing it")
+assert(markers[1].widget.content.label == "Horde x4",
+    "rejoining the world-space group should restore the horde count")
+
 for _, position in pairs(units[markers[4].unit].nodes) do position.screen_x = -100 end
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 2)
 assert(markers[1].widget.content.label == "Horde x3",
-    "horde count should decrease after a member leaves the edge buffer")
+    "horde count should still decrease after a member leaves the edge buffer")
 print("BallHammer horde marker smoke: ok")

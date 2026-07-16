@@ -26,6 +26,7 @@ end
 
 local template = dofile("scripts/mods/BallHammer/BallHammerMarker.lua")
 assert(template.check_line_of_sight, "priority ESP should request Darktide's native visibility raycast")
+assert(template.unit_node == "j_head", "priority visibility should raycast to the head instead of the floor")
 local definition = template.create_widget_defintion(template, "pivot")
 local styles = {}
 for _, pass in ipairs(definition) do styles[pass.style_id] = pass.style end

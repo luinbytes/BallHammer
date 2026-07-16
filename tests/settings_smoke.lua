@@ -11,11 +11,9 @@ get_mod = function() return mod end
 local data = dofile("scripts/mods/BallHammer/BallHammer_data.lua")
 local widgets = data.options.widgets
 
-assert(#widgets == 4, "menu should expose ESP, aimbot, triggerbot, and rage sections")
+assert(#widgets == 2, "menu should expose only ESP and aimbot sections")
 assert(widgets[1].setting_id == "esp_settings", "ESP should be the first section")
 assert(widgets[2].setting_id == "aimbot_settings", "Aimbot should be the second section")
-assert(widgets[3].setting_id == "triggerbot_settings", "Triggerbot should be the third section")
-assert(widgets[4].setting_id == "rage_settings", "Rage should be the fourth section")
 
 local activation = widgets[2].sub_widgets[1]
 assert(activation.setting_id == "aim_activation" and activation.default_value == "left_mouse",
@@ -26,13 +24,6 @@ assert(activation.options[1].value == "off", "aim activation should be the singl
 assert(activation.options[4].value == "both_mouse", "aimbot should support either mouse button")
 assert(widgets[2].sub_widgets[5].setting_id == "aim_smoothness", "aim speed should use a smoothness slider")
 assert(widgets[2].sub_widgets[6].setting_id == "aim_curve", "aimbot should expose curve strength")
-
-local trigger_activation = widgets[3].sub_widgets[1]
-assert(trigger_activation.setting_id == "trigger_activation", "triggerbot should have its own activation mode")
-assert(trigger_activation.options[4].value == "both_mouse", "triggerbot should support either mouse button")
-assert(trigger_activation.sub_widgets[1].setting_id == "trigger_key",
-    "triggerbot custom keybind should be nested under its activation mode")
-assert(widgets[4].sub_widgets[1].setting_id == "rage_key", "rage mode should expose a held keybind")
 
 local function check_localization(widget)
     assert(localization[widget.setting_id], "missing setting localization: " .. widget.setting_id)

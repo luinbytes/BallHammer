@@ -6,10 +6,13 @@ local Bounds = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerBound
 local template = {}
 local cached_time = nil
 local cached_boxes = {}
+local transition_states = {}
 local OFFSCREEN_BUFFER = 48
+local TRANSITION_DURATION = 0.28
+local TRANSITION_SPEED = 14
 
 template.name = "ballhammer_horde_marker"
-template.unit_node = "root_point"
+template.unit_node = "j_head"
 template.size = { 1, 1 }
 template.check_line_of_sight = true
 template.max_distance = 999
@@ -131,6 +134,13 @@ local function rebuild_cache(parent, ui_renderer, t)
                         right = box.right,
                         top = box.top,
                         bottom = box.bottom,
+                        member_left = box.left,
+                        member_right = box.right,
+                        member_top = box.top,
+                        member_bottom = box.bottom,
+                        dot_x = box.dot_x,
+                        dot_y = box.dot_y,
+                        grouped = false,
                     }
                 end
             end
@@ -150,10 +160,17 @@ local function rebuild_cache(parent, ui_renderer, t)
                     draw_box = false,
                     draw_dot = true,
                     count = cluster.count,
+                    label = projected[j].name,
                     dot_x = projected[j].dot_x,
                     dot_y = projected[j].dot_y,
+                    member_left = projected[j].left,
+                    member_right = projected[j].right,
+                    member_top = projected[j].top,
+                    member_bottom = projected[j].bottom,
                     anchor_x = projected[j].anchor_x,
                     anchor_y = projected[j].anchor_y,
+                    grouped = true,
+                    leader = false,
                 }
             end
             local leader = projected[1]
@@ -169,6 +186,12 @@ local function rebuild_cache(parent, ui_renderer, t)
                 bottom = cluster.bottom + 4,
                 dot_x = leader.dot_x,
                 dot_y = leader.dot_y,
+                member_left = leader.left,
+                member_right = leader.right,
+                member_top = leader.top,
+                member_bottom = leader.bottom,
+                grouped = true,
+                leader = true,
             } end
         else
             for j = 1, #projected do
@@ -184,6 +207,13 @@ local function rebuild_cache(parent, ui_renderer, t)
                     right = member.right,
                     top = member.top,
                     bottom = member.bottom,
+                    member_left = member.left,
+                    member_right = member.right,
+                    member_top = member.top,
+                    member_bottom = member.bottom,
+                    dot_x = member.dot_x,
+                    dot_y = member.dot_y,
+                    grouped = false,
                 }
             end
         end
@@ -195,6 +225,69 @@ local function set_line(style, x, y, width, height)
     style.offset[2] = y
     style.size[1] = width
     style.size[2] = height
+end
+
+local function animate_membership(unit, box, t)
+    local target = box.grouped and 1 or 0
+    local state = transition_states[unit]
+    if not state then
+        state = { progress = box.grouped and 0 or target, last_t = t }
+        transition_states[unit] = state
+    end
+
+    local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
+    state.last_t = t or state.last_t
+    local step = dt / TRANSITION_DURATION
+    if state.progress < target then
+        state.progress = math.min(target, state.progress + step)
+    elseif state.progress > target then
+        state.progress = math.max(target, state.progress - step)
+    end
+
+    if box.grouped and box.leader then
+        local target_left = box.left - box.member_left
+        local target_right = box.right - box.member_right
+        local target_top = box.top - box.member_top
+        local target_bottom = box.bottom - box.member_bottom
+        if state.left_offset == nil then
+            state.left_offset, state.right_offset = target_left, target_right
+            state.top_offset, state.bottom_offset = target_top, target_bottom
+        else
+            local alpha = 1 - math.exp(-TRANSITION_SPEED * dt)
+            state.left_offset = state.left_offset + (target_left - state.left_offset) * alpha
+            state.right_offset = state.right_offset + (target_right - state.right_offset) * alpha
+            state.top_offset = state.top_offset + (target_top - state.top_offset) * alpha
+            state.bottom_offset = state.bottom_offset + (target_bottom - state.bottom_offset) * alpha
+        end
+        state.leader = true
+    elseif box.grouped then
+        state.leader = false
+    end
+
+    local progress = state.progress
+    local eased = progress * progress * (3 - 2 * progress)
+    local leader = box.leader or not box.grouped and state.leader
+    local target_left, target_right, target_top, target_bottom
+    if leader and state.left_offset then
+        target_left = box.member_left + state.left_offset
+        target_right = box.member_right + state.right_offset
+        target_top = box.member_top + state.top_offset
+        target_bottom = box.member_bottom + state.bottom_offset
+    else
+        target_left, target_right = box.dot_x, box.dot_x
+        target_top, target_bottom = box.dot_y, box.dot_y
+    end
+
+    local motion = {
+        left = box.member_left + (target_left - box.member_left) * eased,
+        right = box.member_right + (target_right - box.member_right) * eased,
+        top = box.member_top + (target_top - box.member_top) * eased,
+        bottom = box.member_bottom + (target_bottom - box.member_bottom) * eased,
+        box_alpha = leader and 1 or 1 - eased,
+        dot_alpha = eased,
+    }
+    if progress == 0 then state.leader = false end
+    return motion
 end
 
 local function apply_distance_alpha(widget, data, distance, visible)
@@ -214,6 +307,17 @@ local function apply_distance_alpha(widget, data, distance, visible)
     label_color[1], label_color[2], label_color[3], label_color[4] = alpha, red, green, blue
 end
 
+local function apply_motion_alpha(widget, motion)
+    for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
+        local color = widget.style[style_id].color
+        color[1] = math.floor(color[1] * motion.box_alpha + 0.5)
+    end
+    widget.style.label.text_color[1] = math.floor(
+        widget.style.label.text_color[1] * motion.box_alpha + 0.5
+    )
+    widget.style.dot.color[1] = math.floor(widget.style.dot.color[1] * motion.dot_alpha + 0.5)
+end
+
 template.on_enter = function(widget, marker)
     mod.horde_marker_refs[marker.unit] = marker
     local data = marker.data or mod.horde_unit_data[marker.unit]
@@ -229,6 +333,7 @@ end
 template.on_exit = function(_, marker)
     mod.horde_marker_refs[marker.unit] = nil
     mod.horde_active_markers[marker.unit] = nil
+    transition_states[marker.unit] = nil
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker, _, _, t)
@@ -253,19 +358,21 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
             marker.raycast_initialized and marker.raycast_result == false)
     end
 
-    widget.content.draw_box = box.draw_box
-    widget.content.draw_dot = box.draw_dot
-    if box.draw_dot then
+    local motion = animate_membership(marker.unit, box, t)
+    apply_motion_alpha(widget, motion)
+    widget.content.draw_box = motion.box_alpha > 0.001
+    widget.content.draw_dot = motion.dot_alpha > 0.001
+    if widget.content.draw_dot then
         widget.style.dot.offset[1] = box.dot_x - box.anchor_x
         widget.style.dot.offset[2] = box.dot_y - box.anchor_y
     end
-    if box.draw_box then
-        local width = box.right - box.left
-        local height = box.bottom - box.top
-        local left = box.left - box.anchor_x
-        local right = box.right - box.anchor_x
-        local top = box.top - box.anchor_y
-        local bottom = box.bottom - box.anchor_y
+    if widget.content.draw_box then
+        local width = motion.right - motion.left
+        local height = motion.bottom - motion.top
+        local left = motion.left - box.anchor_x
+        local right = motion.right - box.anchor_x
+        local top = motion.top - box.anchor_y
+        local bottom = motion.bottom - box.anchor_y
         local center_x = (left + right) * 0.5
         local center_y = (top + bottom) * 0.5
 
@@ -274,7 +381,7 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         set_line(widget.style.left, left, center_y, 1, height)
         set_line(widget.style.right, right, center_y, 1, height)
 
-        widget.content.label = box.count >= 3 and "Horde x" .. box.count or box.label
+        widget.content.label = box.grouped and box.leader and "Horde x" .. box.count or box.label
         widget.style.label.offset[1] = center_x
         widget.style.label.offset[2] = top - 12
     else
