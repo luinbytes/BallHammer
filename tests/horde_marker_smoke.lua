@@ -10,7 +10,11 @@ end
 
 local vector = {}
 vector.__index = vector
-Vector3 = function(x, y, z) return setmetatable({ x = x, y = y, z = z }, vector) end
+Vector3 = setmetatable({
+    to_elements = function(value) return value.x, value.y, value.z end,
+}, {
+    __call = function(_, x, y, z) return setmetatable({ x = x, y = y, z = z }, vector) end,
+})
 RESOLUTION_LOOKUP = { width = 1000, height = 600 }
 
 local mod = {

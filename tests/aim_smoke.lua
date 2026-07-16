@@ -8,18 +8,28 @@ end
 
 local vector = {}
 local transient_vector
+local function components(value)
+    return rawget(value, "_x") or rawget(value, "x"),
+        rawget(value, "_y") or rawget(value, "y"),
+        rawget(value, "_z") or rawget(value, "z")
+end
 vector.__index = vector
 vector.__sub = function(a, b)
     local metatable = getmetatable(b)
     assert(metatable == vector or metatable == transient_vector,
         "native Vector3 cannot subtract boxed userdata")
-    return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, vector)
+    local ax, ay, az = components(a)
+    local bx, by, bz = components(b)
+    return Vector3(ax - bx, ay - by, az - bz)
 end
 vector.__add = function(a, b)
-    return setmetatable({ x = a.x + b.x, y = a.y + b.y, z = a.z + b.z }, vector)
+    local ax, ay, az = components(a)
+    local bx, by, bz = components(b)
+    return Vector3(ax + bx, ay + by, az + bz)
 end
 vector.__mul = function(a, scalar)
-    return setmetatable({ x = a.x * scalar, y = a.y * scalar, z = a.z * scalar }, vector)
+    local x, y, z = components(a)
+    return Vector3(x * scalar, y * scalar, z * scalar)
 end
 local boxed_vector = {}
 boxed_vector.__index = boxed_vector
@@ -29,8 +39,7 @@ local last_constructed
 transient_vector = {
     __index = function(value, key)
         if key == "x" or key == "y" or key == "z" then
-            assert(value._valid, "frame-local Vector3 userdata expired")
-            return value["_" .. key]
+            error("Darktide Vector3 components must be read with Vector3.to_elements")
         end
         return transient_vector[key]
     end,
@@ -40,12 +49,21 @@ transient_vector = {
 }
 
 Vector3 = setmetatable({
-    length = function(v) return math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z) end,
+    length = function(v)
+        local x, y, z = components(v)
+        return math.sqrt(x * x + y * y + z * z)
+    end,
     normalize = function(v)
         local length = Vector3.length(v)
-        return setmetatable({ x = v.x / length, y = v.y / length, z = v.z / length }, vector)
+        local x, y, z = components(v)
+        return Vector3(x / length, y / length, z / length)
     end,
-    dot = function(a, b) return a.x * b.x + a.y * b.y + a.z * b.z end,
+    dot = function(a, b)
+        local ax, ay, az = components(a)
+        local bx, by, bz = components(b)
+        return ax * bx + ay * by + az * bz
+    end,
+    to_elements = components,
     lerp = function() error("Darktide's lerp binding rejects aim-position userdata") end,
 }, {
     __call = function(_, x, y, z)
@@ -53,6 +71,21 @@ Vector3 = setmetatable({
         return last_constructed
     end,
 })
+
+Vector3Box = function(value)
+    local x, y, z = Vector3.to_elements(value)
+    return {
+        store = function(self, next_value)
+            self.x, self.y, self.z = Vector3.to_elements(next_value)
+        end,
+        unbox = function(self)
+            return Vector3(self.x, self.y, self.z)
+        end,
+        x = x,
+        y = y,
+        z = z,
+    }
+end
 
 local settings = {
     enable_outlines = false,
@@ -78,8 +111,10 @@ local settings = {
 local messages = {}
 local hooks = {}
 local recoil_calls = 0
+local recoil_offset_calls = 0
 local recoil_api = {
     first_person_offset = function(_, recoil)
+        recoil_offset_calls = recoil_offset_calls + 1
         return recoil.pitch_offset, recoil.yaw_offset
     end,
     add_recoil = function()
@@ -196,11 +231,12 @@ Unit = {
         if unit == player_unit then return Vector3(0, 0, 0) end
         local data = units[unit]
         local position = data.nodes and data.nodes[node] or data.position
+        local x, y, z = Vector3.to_elements(position)
         if data.mixed_vector then
             data.position_reads = (data.position_reads or 0) + 1
-            if data.position_reads % 2 == 0 then return Vector3(position.x, position.y, position.z) end
+            if data.position_reads % 2 == 0 then return Vector3(x, y, z) end
         end
-        return setmetatable({ x = position.x, y = position.y, z = position.z }, boxed_vector)
+        return setmetatable({ x = x, y = y, z = z }, boxed_vector)
     end,
 }
 Quaternion = { forward = function(rotation) return rotation end }
@@ -217,12 +253,14 @@ Actor = { unit = function(actor) return actor.unit end }
 PhysicsWorld = {
     raycast = function(world, _, direction)
         assert(world == physics_world, "raycast should use the gameplay physics world")
-        if direction.x < 0.15 then return { { false, false, false, {} } } end
+        local direction_x = Vector3.to_elements(direction)
+        if direction_x < 0.15 then return { { false, false, false, {} } } end
         local closest
         for unit, data in pairs(units) do
             if HEALTH_ALIVE[unit] then
                 local unit_direction = Vector3.normalize(data.position)
-                if math.abs(unit_direction.x - direction.x) < 0.001 then closest = unit end
+                local unit_direction_x = Vector3.to_elements(unit_direction)
+                if math.abs(unit_direction_x - direction_x) < 0.001 then closest = unit end
             end
         end
         return closest and { { false, false, false, { unit = closest } } } or nil
@@ -376,9 +414,14 @@ local first_person_extension = {
     _input_extension = {
         get = function(_, action) return action == held_action end,
     },
-    is_within_default_view = function(_, position) return position.y > 0 end,
+    is_within_default_view = function(_, position)
+        local _, y = Vector3.to_elements(position)
+        return y > 0
+    end,
 }
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 0)
+assert(recoil_offset_calls == 0,
+    "aimbot should follow view orientation without compensating animated weapon recoil")
 
 local expected_yaw = math.atan2(8, 1.5) - math.pi * 0.5
 local expected_pitch = math.asin(0.5 / math.sqrt(1.5 * 1.5 + 8 * 8 + 0.5 * 0.5))
@@ -509,4 +552,11 @@ assert(orientation.yaw == released_yaw,
     "generated rage fire should not feed back into left-mouse aimbot activation")
 assert(not CLASS.PlayerUnitInputExtension.get({ _is_local_unit = true }, "action_one_hold"),
     "rage should release fire with its held key")
+for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+held_action = "action_one_hold"
+local no_target_ok, no_target_error = pcall(
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"],
+    first_person_extension, player_unit, 0.1, 1.7, 17
+)
+assert(no_target_ok, "holding aim without a valid target should be a no-op: " .. tostring(no_target_error))
 print("BallHammer aim smoke: ok")

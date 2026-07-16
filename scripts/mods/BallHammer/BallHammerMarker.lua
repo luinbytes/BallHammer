@@ -118,11 +118,12 @@ local function update_box(parent, ui_renderer, widget, marker, body)
     local left = bounds.left - body_x
     local right = bounds.right - body_x
 
-    set_line(widget.style.top, 0, top, right - left, 1)
-    set_line(widget.style.bottom, 0, bottom, right - left, 1)
+    local center_x = (left + right) * 0.5
+    set_line(widget.style.top, center_x, top, right - left, 1)
+    set_line(widget.style.bottom, center_x, bottom, right - left, 1)
     set_line(widget.style.left, left, (top + bottom) * 0.5, 1, bottom - top)
     set_line(widget.style.right, right, (top + bottom) * 0.5, 1, bottom - top)
-    local name_x, name_y = 0, top - 16
+    local name_x, name_y = center_x, top - 16
     local flag_x = right + 4 + widget.style.flag.size[1] * 0.5
     local flag_y = top + widget.style.flag.size[2] * 0.5
     widget.style.name.offset[1], widget.style.name.offset[2] = name_x, name_y

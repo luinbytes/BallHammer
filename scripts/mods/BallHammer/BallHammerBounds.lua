@@ -35,8 +35,9 @@ function bounds.project(parent, ui_renderer, camera, unit, body, fallback_height
 
     if points < 2 then
         local body_x, body_y = screen_point(parent, camera, body, screen_x, screen_y, inverse_scale)
+        local world_x, world_y, world_z = Vector3.to_elements(body)
         local top_x, top_y = screen_point(parent, camera,
-            Vector3(body.x, body.y, body.z + (fallback_height or 1.8)), screen_x, screen_y, inverse_scale)
+            Vector3(world_x, world_y, world_z + (fallback_height or 1.8)), screen_x, screen_y, inverse_scale)
         if not body_x or not top_x then return nil end
         left, right = math.min(body_x, top_x), math.max(body_x, top_x)
         top, bottom = math.min(body_y, top_y), math.max(body_y, top_y)

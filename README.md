@@ -4,7 +4,7 @@
 [![Darktide Mod Framework](https://img.shields.io/badge/Darktide-Mod_Framework-EF4135)](https://github.com/Darktide-Mod-Framework/Darktide-Mod-Framework)
 [![Latest commit](https://img.shields.io/github/last-commit/luinbytes/BallHammer)](https://github.com/luinbytes/BallHammer/commits/main)
 
-BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framework/Darktide-Mod-Framework) mod with Perkaholic-style enemy overlays and configurable aim controls.
+BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framework/Darktide-Mod-Framework) mod with enemy overlays and configurable aim controls.
 
 ## Features
 
@@ -24,4 +24,4 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 2. Copy this repository into the game's `mods` directory as `BallHammer`.
 3. Add `BallHammer` to `mod_load_order.txt`.
 
-Configure the mod from Darktide's mod options. The `/esp` command and the optional ESP keybind toggle the overlays during play.
+Configure the mod from Darktide's mod options.

@@ -76,6 +76,7 @@ local function project_box(parent, ui_renderer, marker)
     if not data then return nil end
     local body = Unit.world_position(marker.unit, 1)
     if not body then return nil end
+    local world_x, world_y, world_z = Vector3.to_elements(body)
 
     local box = {
         id = marker.id,
@@ -84,7 +85,7 @@ local function project_box(parent, ui_renderer, marker)
         name = data.name or "Enemy",
         clusterable = data.clusterable == true,
         force_horde_merge = data.force_horde_merge == true,
-        world = { x = body.x, y = body.y, z = body.z },
+        world = { x = world_x, y = world_y, z = world_z },
     }
     if not distance or distance > mod.get_horde_distance() then return box end
 

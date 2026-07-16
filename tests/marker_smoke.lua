@@ -86,8 +86,12 @@ template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marke
 assert(widget.content.name == "Ritualist 90m", "distance should stay with the name above the box")
 assert(widget.style.top.size[1] == 46,
     "priority boxes should use projected bone extents instead of inferred humanoid width")
+assert(widget.style.top.offset[1] == (widget.style.left.offset[1] + widget.style.right.offset[1]) * 0.5 and
+    widget.style.bottom.offset[1] == widget.style.top.offset[1],
+    "horizontal box lines should span between the projected side lines")
 local flag_left = widget.style.flag.offset[1] - widget.style.flag.size[1] * 0.5
-assert(widget.style.name.offset[1] == 0 and widget.style.name.offset[2] < widget.style.top.offset[2],
+assert(widget.style.name.offset[1] == widget.style.top.offset[1] and
+    widget.style.name.offset[2] < widget.style.top.offset[2],
     "name should stay centered above the box")
 assert(math.abs(flag_left - widget.style.right.offset[1] - 4) < 0.001 and
     math.abs(widget.style.flag.offset[2] - widget.style.top.offset[2] - 10) < 0.001,
@@ -99,7 +103,7 @@ projected_top_y = 220
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
 flag_left = widget.style.flag.offset[1] - widget.style.flag.size[1] * 0.5
 assert(math.abs(flag_left - widget.style.right.offset[1] - 4) < 0.001 and
-    widget.style.name.offset[1] == 0,
+    widget.style.name.offset[1] == widget.style.top.offset[1],
     "walking around an enemy should not move labels away from their box anchors")
 assert(widget.style.top.color[1] == 64 and widget.style.name.text_color[1] == 64
     and widget.style.flag.text_color[1] == 64 and widget.style.name_shadow.text_color[1] < 64,

@@ -1,7 +1,6 @@
 local mod = get_mod("BallHammer")
 local MarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerMarker")
 local HordeMarkerTemplate = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerHordeMarker")
-local Recoil = require("scripts/utilities/recoil")
 
 local BREED_DATA = {
     chaos_hound                 = { name = "Hound",           color = { 255, 255, 61,  61  }, outline_color = { 1,   0.24, 0.24 }, slot = "special_target" },
@@ -545,7 +544,9 @@ local AIM_NODES = {
 }
 
 local function native_vector(position)
-    return position and Vector3(position.x, position.y, position.z) or nil
+    if not position then return nil end
+    local x, y, z = Vector3.to_elements(position)
+    return Vector3(x, y, z)
 end
 
 local function aim_position(unit)
@@ -642,38 +643,32 @@ local function select_aim_target(physics_world, player_unit, origin, camera_forw
         end
     end
 
-    if not locked_target or mode == "rage" and best_unit and best_unit ~= locked_target
-        and best_score > (current_score or -1) + 0.12 then
+    if best_unit and (not locked_target or mode == "rage" and best_unit ~= locked_target
+        and best_score > (current_score or -1) + 0.12) then
         locked_target = best_unit
         locked_mode = mode
-        locked_position = { x = best_position.x, y = best_position.y, z = best_position.z }
+        locked_position = Vector3Box(best_position)
         lock_last_visible_t = t
         current_position, current_visible = best_position, true
     end
     if not locked_target or not current_position then return nil end
 
     local position_alpha = 1 - math.exp(-18 * dt)
-    locked_position.x = locked_position.x + (current_position.x - locked_position.x) * position_alpha
-    locked_position.y = locked_position.y + (current_position.y - locked_position.y) * position_alpha
-    locked_position.z = locked_position.z + (current_position.z - locked_position.z) * position_alpha
-    return Vector3(locked_position.x, locked_position.y, locked_position.z), current_visible
+    local previous_x, previous_y, previous_z = Vector3.to_elements(locked_position:unbox())
+    local current_x, current_y, current_z = Vector3.to_elements(current_position)
+    locked_position:store(Vector3(
+        previous_x + (current_x - previous_x) * position_alpha,
+        previous_y + (current_y - previous_y) * position_alpha,
+        previous_z + (current_z - previous_z) * position_alpha
+    ))
+    return locked_position:unbox(), current_visible
 end
 
-local function aim_at_position(player, unit_data, self, first_person, target_position, dt, smoothness)
+local function aim_at_position(player, first_person, target_position, dt, smoothness)
     local direction = Vector3.normalize(target_position - first_person.position)
-    local target_yaw = math.atan2(direction.y, direction.x) - math.pi * 0.5
-    local target_pitch = math.asin(math.clamp(direction.z, -1, 1))
-    local recoil_pitch, recoil_yaw = Recoil.first_person_offset(
-        self._weapon_extension:recoil_template(),
-        self._recoil_component,
-        self._movement_state_component,
-        self._locomotion_component,
-        self._inair_state_component
-    )
-    local sway = unit_data:read_component("sway")
-    target_yaw = target_yaw - recoil_yaw - (sway and sway.offset_x or 0)
-    target_pitch = target_pitch - recoil_pitch - (sway and sway.offset_y or 0)
-
+    local direction_x, direction_y, direction_z = Vector3.to_elements(direction)
+    local target_yaw = math.atan2(direction_y, direction_x) - math.pi * 0.5
+    local target_pitch = math.asin(math.clamp(direction_z, -1, 1))
     local orientation = player:get_orientation()
     local yaw_delta = (target_yaw - orientation.yaw + math.pi) % (math.pi * 2) - math.pi
     local pitch_delta = (target_pitch - orientation.pitch + math.pi) % (math.pi * 2) - math.pi
@@ -742,7 +737,7 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     local smoothness = mode == "rage" and rage_smoothness
         or mode == "trigger" and trigger_smoothness
         or aim_smoothness
-    local error = aim_at_position(player, unit_data, self, first_person, target_position, dt, smoothness)
+    local error = aim_at_position(player, first_person, target_position, dt, smoothness)
     auto_fire = visible and (mode == "rage" and error <= 1.5
         or mode == "trigger" and error <= trigger_fire_fov)
 end)
