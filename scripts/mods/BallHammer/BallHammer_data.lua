@@ -120,8 +120,43 @@ return {
                         setting_id = "aim_fov",
                         type = "numeric",
                         default_value = 30,
-                        range = { 1, 180 },
+                        range = { 1, 89 },
                         decimals_number = 0,
+                    },
+                    {
+                        setting_id = "show_aim_fov",
+                        type = "checkbox",
+                        default_value = true,
+                        sub_widgets = {
+                            {
+                                setting_id = "aim_fov_opacity",
+                                type = "numeric",
+                                default_value = 60,
+                                range = { 0, 100 },
+                                decimals_number = 0,
+                            },
+                            {
+                                setting_id = "aim_fov_red",
+                                type = "numeric",
+                                default_value = 255,
+                                range = { 0, 255 },
+                                decimals_number = 0,
+                            },
+                            {
+                                setting_id = "aim_fov_green",
+                                type = "numeric",
+                                default_value = 158,
+                                range = { 0, 255 },
+                                decimals_number = 0,
+                            },
+                            {
+                                setting_id = "aim_fov_blue",
+                                type = "numeric",
+                                default_value = 181,
+                                range = { 0, 255 },
+                                decimals_number = 0,
+                            },
+                        },
                     },
                     {
                         setting_id = "aim_smoothness",
@@ -212,6 +247,103 @@ return {
                         type = "numeric",
                         default_value = 10,
                         range = { 0, 100 },
+                        decimals_number = 0,
+                    },
+                },
+            },
+            {
+                setting_id = "director_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "enable_aim_director",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                },
+            },
+            {
+                setting_id = "threat_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "enable_threat_markers",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                    {
+                        setting_id = "enable_threat_reactions",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "reaction_timing",
+                        type = "numeric",
+                        default_value = 50,
+                        range = { 0, 100 },
+                        decimals_number = 0,
+                    },
+                    {
+                        setting_id = "emergency_override",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "enable_survival_debug",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                },
+            },
+            {
+                setting_id = "guard_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "enable_guard_brain",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "enable_emergency_switch",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "stamina_reserve",
+                        type = "numeric",
+                        default_value = 25,
+                        range = { 20, 60 },
+                        decimals_number = 0,
+                    },
+                },
+            },
+            {
+                setting_id = "governor_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "enable_resource_governor",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "enable_auto_vent",
+                        type = "checkbox",
+                        default_value = false,
+                    },
+                    {
+                        setting_id = "peril_target",
+                        type = "numeric",
+                        default_value = 90,
+                        range = { 80, 95 },
+                        decimals_number = 0,
+                    },
+                    {
+                        setting_id = "heat_target",
+                        type = "numeric",
+                        default_value = 90,
+                        range = { 80, 95 },
                         decimals_number = 0,
                     },
                 },

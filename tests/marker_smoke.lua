@@ -98,6 +98,13 @@ local parent = {
 }
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
 assert(widget.content.name == "Ritualist 90m", "distance should stay with the name above the box")
+marker.data.threat_text = "DODGE 0.2"
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
+assert(widget.content.flag == "DODGE 0.2",
+    "threat markers should show the chosen reaction and impact countdown")
+marker.data.threat_text = nil
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
+assert(widget.content.flag == "SPECIAL", "category flag should return after a threat clears")
 assert(widget.style.top.size[1] == 46,
     "priority boxes should use projected bone extents instead of inferred humanoid width")
 assert(widget.style.health_bg.size[1] == 46 and widget.style.health_fill.size[1] == 23,

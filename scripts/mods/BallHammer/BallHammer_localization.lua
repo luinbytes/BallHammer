@@ -28,6 +28,11 @@ return {
     aim_location_torso = { en = "Torso" },
     aim_distance = { en = "Aim Distance (m)" },
     aim_fov = { en = "Aim Field of View (degrees)" },
+    show_aim_fov = { en = "Show Target FOV Circle" },
+    aim_fov_opacity = { en = "FOV Circle Opacity (%%)" },
+    aim_fov_red = { en = "FOV Circle Red" },
+    aim_fov_green = { en = "FOV Circle Green" },
+    aim_fov_blue = { en = "FOV Circle Blue" },
     aim_smoothness = { en = "Aim Smoothness" },
     aim_curve = { en = "Aim Curve" },
 
@@ -42,6 +47,27 @@ return {
     rage_key = { en = "Hold Rage Key" },
     rage_distance = { en = "Rage Distance (m)" },
     rage_smoothness = { en = "Rage Smoothness" },
+
+    director_settings = { en = "Armor and Weakspot Director" },
+    enable_aim_director = { en = "Armor-Aware Hit Zones" },
+
+    threat_settings = { en = "Threat Interceptor" },
+    enable_threat_markers = { en = "Threat Reaction Markers" },
+    enable_threat_reactions = { en = "Automatic Threat Reactions (Diagnostic)" },
+    reaction_timing = { en = "Reaction Timing (Early to Late)" },
+    emergency_override = { en = "Emergency Override Physical Input" },
+    enable_survival_debug = { en = "Diagnostic Logging" },
+
+    guard_settings = { en = "Guard Brain" },
+    enable_guard_brain = { en = "Automatic Block and Push (Diagnostic)" },
+    enable_emergency_switch = { en = "Emergency Switch to Melee" },
+    stamina_reserve = { en = "Push Stamina Reserve (%%)" },
+
+    governor_settings = { en = "Warp and Heat Governor" },
+    enable_resource_governor = { en = "Prevent Unsafe Attacks" },
+    enable_auto_vent = { en = "Auto-Quell or Safe Vent" },
+    peril_target = { en = "Peril Safety Target (%%)" },
+    heat_target = { en = "Heat Safety Target (%%)" },
 
     weapon_settings = { en = "Weapon" },
     enable_auto_fire = { en = "Automatic Semi-Auto Fire" },

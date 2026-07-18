@@ -87,6 +87,10 @@ local function name_for(data, distance)
     return data.name .. (distance and " " .. distance .. "m" or "")
 end
 
+local function flag_for(data)
+    return data.threat_text or data.flag or ""
+end
+
 local function apply_distance_alpha(widget, data, distance, visible)
     local max_distance = mod.get_max_distance()
     local fade_start = max_distance * 0.6
@@ -152,7 +156,7 @@ template.on_enter = function(widget, marker)
     local data = marker.data or mod.get_unit_data(marker.unit)
     if data then
         widget.content.name = name_for(data)
-        widget.content.flag = data.flag or ""
+        widget.content.flag = flag_for(data)
         for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
             widget.style[style_id].color = table.clone(data.color)
         end
@@ -193,6 +197,7 @@ template.update_function = function(parent, ui_renderer, widget, marker)
     if data then
         apply_distance_alpha(widget, data, distance,
             marker.raycast_initialized and marker.raycast_result == false)
+        widget.content.flag = flag_for(data)
     end
 
     local floor_distance = math.floor(distance)

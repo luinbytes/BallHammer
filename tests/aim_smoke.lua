@@ -103,6 +103,11 @@ local settings = {
     aim_curve = 20,
     aim_location = "head",
     aim_activation = "left_mouse",
+    show_aim_fov = true,
+    aim_fov_opacity = 60,
+    aim_fov_red = 255,
+    aim_fov_green = 158,
+    aim_fov_blue = 181,
     trigger_activation = "off",
     trigger_fov = 5,
     trigger_fire_fov = 0.8,
@@ -115,6 +120,19 @@ local settings = {
     enable_companion_target = false,
     companion_distance = 60,
     enable_auto_whistle = false,
+    enable_aim_director = true,
+    enable_threat_markers = true,
+    enable_threat_reactions = false,
+    reaction_timing = 50,
+    emergency_override = false,
+    enable_survival_debug = false,
+    enable_guard_brain = false,
+    enable_emergency_switch = false,
+    stamina_reserve = 25,
+    enable_resource_governor = false,
+    enable_auto_vent = false,
+    peril_target = 90,
+    heat_target = 90,
 }
 local messages = {}
 local hooks = {}
@@ -136,8 +154,48 @@ local recoil_api = {
         recoil_calls = recoil_calls + 1
     end,
 }
+local director_profile = { name = "ballhammer_test_profile", targets = { {} } }
+local director_positions = {}
+local director_actor
+local prefer_director_head = false
+local director_no_candidates = false
 package.preload["scripts/utilities/recoil"] = function()
     return recoil_api
+end
+package.preload["scripts/utilities/action/action"] = function()
+    return { damage_template = function() return director_profile end }
+end
+package.preload["scripts/utilities/attack/armor"] = function()
+    return { armor_type = function(_, _, name) return name end }
+end
+package.preload["scripts/utilities/attack/damage_calculation"] = function()
+    return { ui_finesse_multiplier = function() return 2 end }
+end
+package.preload["scripts/utilities/attack/damage_profile"] = function()
+    return {
+        target_settings = function(profile) return profile.targets[1] end,
+        lerp_values = function()
+            return { current_target_settings_lerp_values = {} }
+        end,
+        armor_damage_modifier = function(_, _, _, lerp_values, armor_type)
+            assert(lerp_values.current_target_settings_lerp_values,
+                "damage profile lerp values must include target settings")
+            if director_no_candidates then return 0 end
+            if prefer_director_head then return armor_type == "head" and 1 or 0.6 end
+            return armor_type == "head" and 0.6 or 1
+        end,
+    }
+end
+package.preload["scripts/utilities/attack/hit_zone"] = function()
+    return {
+        get_name = function(_, actor) return actor.hit_zone end,
+        hit_zone_center_of_mass = function(unit, name)
+            return director_positions[unit] and director_positions[unit][name]
+        end,
+    }
+end
+package.preload["scripts/utilities/attack/weakspot"] = function()
+    return { hit_weakspot = function(_, name) return name == "head", false end }
 end
 package.preload["scripts/settings/damage/attack_settings"] = function()
     return { attack_types = { companion_dog = "companion_dog" } }
@@ -158,14 +216,22 @@ end
 local mod = {
     get = function(_, key) return settings[key] end,
     io_dofile = function(_, path)
-        return { name = path:find("HordeMarker") and "ballhammer_horde_marker"
+        if path:find("BallHammerSurvival") then
+            return dofile("scripts/mods/BallHammer/BallHammerSurvival.lua")
+        end
+        return { name = path:find("AimMarker") and "ballhammer_aim_marker"
+            or path:find("HordeMarker") and "ballhammer_horde_marker"
             or path:find("PickupMarker") and "ballhammer_pickup_marker"
             or "ballhammer_marker" }
     end,
     command = function() end,
     echo = function(_, message) messages[#messages + 1] = message end,
     hook_safe = function(_, object, method, handler)
-        if type(object) == "string" then hooks[object .. "." .. method] = handler end
+        if type(object) == "string" then
+            hooks[object .. "." .. method] = handler
+        elseif CLASS and object == CLASS.OutlineSystem then
+            hooks["OutlineSystem." .. method] = handler
+        end
     end,
     hook = function(_, object, method, handler)
         if type(object) == "string" then
@@ -214,6 +280,7 @@ local player = {
     end,
 }
 local marker_events = {}
+local aim_marker_events = {}
 local held_action = "action_one_hold"
 local preexisting_units = {}
 local preexisting_pickups = {}
@@ -224,6 +291,7 @@ local companion_orders = {}
 local companion_unit = {}
 local companion_network_unit = {}
 local hud_camera_position = Vector3(0, 0, 0)
+RESOLUTION_LOOKUP = { height = 1080, scale = 1 }
 local whistle_equipped = false
 local whistle_charged = false
 local whistle_action_valid = true
@@ -249,11 +317,27 @@ local weapon_action_component = {
     start_t = 1.0,
     template = { action_inputs = weapon_action_inputs },
 }
+local wielded_slot = "slot_secondary"
+local stamina_fraction = 1
+local warp_percentage = 0
+local heat_percentage = 0
+local current_outline_system = nil
+local live_world_markers = { _marker_templates = {} }
 local weapon_extension = {
     action_input_is_currently_valid = function() return shot_ready end,
     recoil_template = function() return {} end,
 }
 Managers = {
+    ui = {
+        get_hud = function()
+            return {
+                element = function(_, name)
+                    assert(name == "HudElementWorldMarkers")
+                    return live_world_markers
+                end,
+            }
+        end,
+    },
     player = { local_player = function() return player end },
     input = {
         _find_active_device = function(_, device)
@@ -271,6 +355,10 @@ Managers = {
                 assert(viewport_name == "player_1")
                 return { position = hud_camera_position }
             end,
+            fov = function(_, viewport_name)
+                assert(viewport_name == "player_1")
+                return math.rad(65)
+            end,
         },
         extension = {
             get_entities = function(_, name)
@@ -279,6 +367,7 @@ Managers = {
                 error("unexpected extension query: " .. tostring(name))
             end,
             system = function(_, name)
+                if name == "outline_system" then return current_outline_system end
                 if name == "smart_tag_system" then
                     return {
                         set_contextual_unit_tag = function(_, tagger, target, alternate)
@@ -300,7 +389,9 @@ Managers = {
     },
     event = {
         trigger = function(_, event_name, marker_name, unit, _, data)
-            marker_events[#marker_events + 1] = {
+            local events = event_name == "add_world_marker_position"
+                and aim_marker_events or marker_events
+            events[#events + 1] = {
                 event_name = event_name,
                 marker_name = marker_name,
                 unit = unit,
@@ -345,6 +436,25 @@ ScriptUnit = {
                     end
                     if name == "weapon_action" then
                         return weapon_action_component
+                    end
+                    if name == "inventory" then
+                        return { wielded_slot = wielded_slot }
+                    end
+                    if name == "stamina" then
+                        return { current_fraction = stamina_fraction }
+                    end
+                    if name == "warp_charge" then
+                        return { current_percentage = warp_percentage }
+                    end
+                    if name == "slot_primary" or name == "slot_secondary" then
+                        return { overheat_current_percentage = heat_percentage }
+                    end
+                    if name == "slot_unarmed" then
+                        return setmetatable({}, {
+                            __index = function(_, field)
+                                error("unsupported unarmed field: " .. tostring(field))
+                            end,
+                        })
                     end
                     if name == "disabled_character_state" then
                         return {
@@ -408,15 +518,19 @@ World = {
 }
 Actor = { unit = function(actor) return actor.unit end }
 PhysicsWorld = {
-    raycast = function(world, origin, direction, _, cast_type, filter_key, filter_name)
+    raycast = function(world, origin, direction, _, cast_type, ...)
         assert(world == physics_world, "raycast should use the gameplay physics world")
         local ox, oy, oz = Vector3.to_elements(origin)
         local cx, cy, cz = Vector3.to_elements(hud_camera_position)
         assert(ox == cx and oy == cy and oz == cz,
             "aim and companion visibility should cast from the HUD camera")
-        assert(cast_type == "all" and filter_key == "collision_filter" and
-            filter_name == "filter_interactable_line_of_sight_marker_check",
-            "aim and companion visibility should use the same filter as ESP")
+        local arguments = { ... }
+        local options = {}
+        for i = 1, #arguments, 2 do options[arguments[i]] = arguments[i + 1] end
+        assert(cast_type == "all" and options.types == "both" and options.max_hits == 256
+            and options.collision_filter == "filter_player_character_shooting_raycast",
+            "aim visibility should use the real weapon ray collision filter")
+        if director_actor then return { { false, false, false, director_actor } } end
         local direction_x = Vector3.to_elements(direction)
         if direction_x < 0.15 then return { { false, false, false, {} } } end
         return nil
@@ -487,7 +601,9 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, remote_weapon_unit)
 assert(recoil_calls == 3, "no recoil must not alter remote weapon prediction")
 
-hooks["HudElementWorldMarkers.init"]({ _marker_templates = {} })
+hooks["HudElementWorldMarkers.init"](live_world_markers)
+assert(aim_marker_events[1] and aim_marker_events[1].marker_name == "ballhammer_aim_marker",
+    "the HUD should create one drawable aim preview marker")
 local plasteel_pickup = {}
 units[plasteel_pickup] = {
     pickup_type = "large_metal",
@@ -499,6 +615,19 @@ for frame = 1, 60 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0
 assert(marker_events[1] and marker_events[1].marker_name == "ballhammer_pickup_marker"
     and marker_events[1].data.name == "Plasteel",
     "pickup ESP should discover and classify materials that predate a hot reload")
+local stimm_names = {
+    syringe_corruption_pocketable = "Med Stimm",
+    syringe_ability_boost_pocketable = "Concentration Stimm",
+    syringe_power_boost_pocketable = "Combat Stimm",
+    syringe_speed_boost_pocketable = "Celerity Stimm",
+}
+for pickup_type, expected_name in pairs(stimm_names) do
+    local stimm = {}
+    units[stimm] = { pickup_type = pickup_type, position = Vector3(1, 6, 0) }
+    hooks["InteracteeExtension.init"](nil, nil, stimm)
+    assert(marker_events[#marker_events].data.name == expected_name,
+        pickup_type .. " should display its real stimm type")
+end
 table.clear(preexisting_pickups)
 settings.enable_pickup_esp = false
 mod.on_setting_changed("enable_pickup_esp")
@@ -524,7 +653,29 @@ preexisting_units[preexisting_unit] = true
 for frame = 1, 60 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
 assert(marker_events[1] and marker_events[1].unit == preexisting_unit,
     "ESP should discover enemies that already existed when BallHammer loaded")
-for frame = 61, 180 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
+local stale_outline_system = {
+    destroyed = false,
+    has_outline = function(self)
+        if self.destroyed then error("destroyed OutlineSystem") end
+        return false
+    end,
+}
+hooks["OutlineSystem.init"](stale_outline_system)
+stale_outline_system.destroyed = true
+current_outline_system = {
+    has_outline = function() return false end,
+    add_outline = function() end,
+    remove_outline = function() end,
+}
+settings.enable_outlines = true
+mod.on_setting_changed("enable_outlines")
+local transition_ok, transition_error = pcall(function()
+    for frame = 61, 120 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
+end)
+assert(transition_ok,
+    "the HUD watchdog must reacquire OutlineSystem after a world transition: "
+        .. tostring(transition_error))
+for frame = 121, 180 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
 assert(marker_events[2] and marker_events[2].unit == preexisting_unit,
     "ESP should retry a marker request if the HUD never created it")
 table.clear(marker_events)
@@ -778,6 +929,31 @@ assert(smart_target_updates > 0 and
 smart_direct_target = nil
 held_action = nil
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.9)
+local preview_target, preview_position = mod.get_aim_preview()
+assert(preview_target == angular_pick and preview_position,
+    "idle aim preview should follow the configured target bone nearest the crosshair")
+local _, _, near_preview_radius = mod.get_aim_preview()
+units[angular_pick].nodes.j_head = Vector3(8, 40, 2.2)
+camera_rotation = Vector3.normalize(Vector3(8, 40, 2.2))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.905)
+local animated_target, animated_position, far_preview_radius = mod.get_aim_preview()
+local animated_x, animated_y, animated_z = Vector3.to_elements(animated_position)
+assert(animated_target == angular_pick and animated_x == 8 and animated_y == 40 and animated_z == 2.2,
+    string.format("the target circle should follow the selected bone's current animation position: %s %.3f %.3f %.3f",
+        tostring(animated_target == angular_pick), animated_x or -1, animated_y or -1, animated_z or -1))
+assert(far_preview_radius < near_preview_radius,
+    "the visible acquisition circle should shrink with target distance")
+units[angular_pick].nodes.j_head = Vector3(5, 20, 1.8)
+camera_rotation = Vector3.normalize(Vector3(5, 20, 1.8))
+orientation.yaw, orientation.pitch = 0, 0
+smart_direct_target = direct_pick
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.91)
+assert(math.abs(orientation.yaw - angular_yaw) < math.abs(orientation.yaw - direct_yaw),
+    "aim activation should acquire the same target shown by the idle preview")
+smart_direct_target = nil
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.92)
 HEALTH_ALIVE[direct_pick], HEALTH_ALIVE[angular_pick] = false, false
 
 local outside_fov = {}
@@ -787,6 +963,7 @@ units[outside_fov] = {
     nodes = { j_head = Vector3(30, 5, 1.8) },
 }
 HEALTH_ALIVE[outside_fov], HEALTH_ALIVE[angular_pick] = true, true
+hooks["HealthExtension.init"](nil, nil, outside_fov)
 smart_direct_target = outside_fov
 camera_rotation = Vector3.normalize(Vector3(5, 20, 1.8))
 orientation.yaw, orientation.pitch = 0, 0
@@ -798,7 +975,17 @@ assert(math.abs(orientation.yaw - angular_yaw) < math.abs(orientation.yaw -
 smart_direct_target = nil
 held_action = nil
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.96)
-HEALTH_ALIVE[outside_fov], HEALTH_ALIVE[angular_pick] = false, false
+HEALTH_ALIVE[angular_pick] = false
+for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+HEALTH_ALIVE[outside_fov] = true
+assert(mod.get_unit_data(outside_fov), "outside-FOV preview target should remain registered")
+camera_rotation = Vector3.normalize(Vector3(30, 5, 1.8))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.97)
+local outside_preview, _, outside_radius = mod.get_aim_preview()
+assert(outside_preview == outside_fov and outside_radius,
+    "idle preview should place the acquisition circle on the closest on-screen target even before acquisition: "
+        .. tostring(outside_preview == outside_fov) .. " " .. tostring(outside_radius))
+HEALTH_ALIVE[outside_fov] = false
 
 local lock_left, lock_right = {}, {}
 units[lock_left] = { breed = "renegade_sniper", position = Vector3(4, 20, 0), mixed_vector = true }
@@ -818,20 +1005,24 @@ camera_rotation = Vector3.normalize(Vector3(20, 10, 0))
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 5)
 local left_yaw = math.atan2(20, 4) - math.pi * 0.5
 local right_yaw = math.atan2(10, 20) - math.pi * 0.5
-assert(math.abs(orientation.yaw - left_yaw) < math.abs(orientation.yaw - right_yaw),
-    "normal aim should keep its live target even after the crosshair leaves acquisition FOV")
+assert(math.abs(orientation.yaw - right_yaw) < math.abs(orientation.yaw - left_yaw),
+    "normal aim should drop a live target after it leaves the FOV")
 
 local swap_target = {}
-units[swap_target] = { breed = "renegade_sniper", position = Vector3(6, 20, 0) }
+units[swap_target] = { breed = "renegade_sniper", position = Vector3(18, 10, 0) }
 HEALTH_ALIVE[swap_target] = true
 hooks["HealthExtension.init"](nil, nil, swap_target)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.1, 5.1)
+local swap_yaw = math.atan2(10, 18) - math.pi * 0.5
+assert(math.abs(orientation.yaw - right_yaw) < math.abs(orientation.yaw - swap_yaw),
+    "normal aim should keep its in-FOV target when another candidate appears")
+
 HEALTH_ALIVE[lock_right] = false
 units[lock_left].position = Vector3(1, 20, 0)
-camera_rotation = Vector3.normalize(Vector3(6, 20, 0))
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.1, 5.1)
-local swap_yaw = math.atan2(20, 6) - math.pi * 0.5
-assert(math.abs(orientation.yaw - swap_yaw) < math.abs(orientation.yaw - left_yaw),
-    "an occluded locked target should swap cleanly to the nearest visible target")
+camera_rotation = Vector3.normalize(Vector3(18, 10, 0))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.2, 5.2)
+assert(math.abs(orientation.yaw - swap_yaw) < math.abs(orientation.yaw - right_yaw),
+    "a dead locked target should swap cleanly to the nearest in-FOV target")
 
 local death_target = {}
 units[death_target] = { breed = "renegade_sniper", position = Vector3(8, 20, 0) }
@@ -839,7 +1030,7 @@ HEALTH_ALIVE[death_target] = true
 hooks["HealthExtension.init"](nil, nil, death_target)
 HEALTH_ALIVE[swap_target] = false
 camera_rotation = Vector3.normalize(Vector3(8, 20, 0))
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.2, 5.2)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.3, 5.3)
 local death_yaw = math.atan2(20, 8) - math.pi * 0.5
 assert(math.abs(orientation.yaw - death_yaw) < math.abs(orientation.yaw - swap_yaw),
     "a dead locked target should swap cleanly to the nearest visible target")
@@ -881,11 +1072,19 @@ local input_handler = {
         action_two_hold = 3,
         grenade_ability_pressed = 4,
         grenade_ability_hold = 5,
+        dodge = 6,
+        move_left = 7,
+        move_right = 8,
+        wield_1 = 9,
+        move_forward = 10,
+        move_backward = 11,
+        weapon_reload_hold = 12,
+        weapon_extra_hold = 13,
     },
     _frame = 11,
     _player = player,
 }
-local network_input_cache = { {}, {}, {}, {}, {} }
+local network_input_cache = { {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} }
 local function parse_network_input(index)
     HumanInputHandler._parse_input(input_handler, network_input_cache, input_service, index)
     input_handler._frame = input_handler._frame + 1
@@ -966,7 +1165,20 @@ input_handler._frame = 21
 local trigger_pressed, _, _, trigger_hold = parse_network_input(10)
 assert(trigger_pressed and trigger_hold,
     "triggerbot fire must be written into Darktide's networked input frame")
+local trigger_replacement = {}
+units[trigger_replacement] = { breed = "renegade_sniper", position = Vector3(12, 20, 0) }
+HEALTH_ALIVE[trigger_replacement] = true
+hooks["HealthExtension.init"](nil, nil, trigger_replacement)
+camera_rotation = Vector3.normalize(Vector3(12, 20, 0))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.1, 21
+)
+local trigger_replacement_yaw = math.atan2(20, 12) - math.pi * 0.5
+assert(math.abs(orientation.yaw - trigger_replacement_yaw) < math.abs(orientation.yaw -
+    (math.atan2(20, 4) - math.pi * 0.5)),
+    "triggerbot should replace a locked target after it leaves the trigger FOV")
 mod.triggerbot_held(false)
+HEALTH_ALIVE[trigger_replacement] = false
 weapon_action_component.start_t = 1.6
 local released_trigger_pressed = parse_network_input(11)
 assert(not released_trigger_pressed,
@@ -1002,11 +1214,230 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 input_handler._frame = 23
 local rage_pressed, _, _, rage_hold = parse_network_input(12)
 assert(rage_pressed and rage_hold,
-    "rage must acquire a visible on-screen target outside normal FOV and network its shot")
+    "rage must acquire any visible on-screen target outside normal FOV")
 mod.rage_held(false)
 weapon_action_component.start_t = 1.8
 assert(not parse_network_input(13),
     "releasing rage must cancel generated fire")
+
+for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+local directed_target = {}
+units[directed_target] = {
+    breed_data = {
+        name = "renegade_sniper",
+        base_height = 1.8,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+        hit_zones = { { name = "head" }, { name = "torso" } },
+    },
+    position = Vector3(4, 20, 0),
+}
+director_positions[directed_target] = {
+    head = Vector3(4, 20, 1.8),
+    torso = Vector3(4, 20, 1),
+}
+director_actor = { unit = directed_target, hit_zone = "torso" }
+weapon_action_component.template.actions = { action_shoot_hip = {} }
+HEALTH_ALIVE[directed_target] = true
+hooks["HealthExtension.init"](nil, nil, directed_target)
+
+director_no_candidates = true
+director_profile = { name = "ballhammer_empty_director_profile", targets = { {} } }
+settings.aim_activation = "right_mouse"
+settings.trigger_activation = "off"
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+camera_rotation = Vector3.normalize(Vector3(4, 20, 1.8))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.25, 22
+)
+assert(orientation.yaw < 0,
+    "aim, trigger, and rage shared targeting should fall back when the director has no usable zones")
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.26, 22
+)
+local fallback_preview, _, fallback_radius = mod.get_aim_preview()
+assert(fallback_preview == directed_target and fallback_radius,
+    "the target FOV circle should keep drawing when the director falls back to the configured bone")
+director_no_candidates = false
+director_profile = { name = "ballhammer_test_profile_restored", targets = { {} } }
+
+settings.aim_activation = "right_mouse"
+settings.trigger_activation = "off"
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+camera_rotation = Vector3.normalize(Vector3(4, 20, 1.8))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.3, 23
+)
+assert(orientation.yaw < 0,
+    "weakpoint director should aim when the visibility ray first hits another body zone")
+local directed_head_pitch = math.asin(1.8 / math.sqrt(4 * 4 + 20 * 20 + 1.8 * 1.8))
+local directed_torso_pitch = math.asin(1 / math.sqrt(4 * 4 + 20 * 20 + 1))
+assert(math.abs(orientation.pitch - directed_torso_pitch) <
+    math.abs(orientation.pitch - directed_head_pitch),
+    "armor director should prefer a less-armored torso over a higher-finesse armored head")
+
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.31, 24
+)
+settings.aim_activation = "off"
+settings.trigger_activation = "custom"
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+orientation.yaw = math.atan2(20, 4) - math.pi * 0.5
+orientation.pitch = directed_torso_pitch
+weapon_action_component.start_t = 1.9
+mod.triggerbot_held(true)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.4, 25
+)
+input_handler._frame = 26
+local directed_trigger_pressed, _, _, directed_trigger_hold = parse_network_input(14)
+assert(directed_trigger_pressed and directed_trigger_hold,
+    "weakpoint director should let triggerbot fire through another body zone on the target")
+mod.triggerbot_held(false)
+parse_network_input(15)
+
+settings.trigger_activation = "off"
+mod.on_setting_changed("trigger_activation")
+weapon_action_component.start_t = 2.0
+mod.rage_held(true)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.5, 27
+)
+input_handler._frame = 26
+local directed_rage_pressed, _, _, directed_rage_hold = parse_network_input(16)
+assert(directed_rage_pressed and directed_rage_hold,
+    "weakpoint director should let rage fire through another body zone on the target")
+mod.rage_held(false)
+parse_network_input(17)
+
+held_action = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.51, 28
+)
+director_actor.hit_zone = "shield"
+settings.aim_activation = "off"
+settings.trigger_activation = "custom"
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+orientation.yaw, orientation.pitch = 0, 0
+camera_rotation = Vector3.normalize(director_positions[directed_target].torso)
+weapon_action_component.start_t = 2.1
+mod.triggerbot_held(true)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.6, 29
+)
+input_handler._frame = 29
+local shield_fire = parse_network_input(18)
+assert(not shield_fire and orientation.yaw == 0 and orientation.pitch == 0,
+    "aim and triggerbot must reject a Bulwark shield hit")
+mod.triggerbot_held(false)
+parse_network_input(19)
+
+director_actor.hit_zone = "torso"
+prefer_director_head = true
+director_profile = { name = "ballhammer_head_test_profile", targets = { {} } }
+director_positions[directed_target].head = Vector3(2, 20, 1.8)
+director_positions[directed_target].torso = Vector3(0, 20, 1)
+settings.aim_fov = 2
+settings.aim_activation = "right_mouse"
+settings.trigger_activation = "off"
+mod.on_setting_changed("aim_fov")
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+camera_rotation = Vector3.normalize(director_positions[directed_target].head)
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.7, 30
+)
+local stable_target, stable_position = mod.get_aim_preview()
+local stable_x = Vector3.to_elements(stable_position)
+assert(stable_target == directed_target and stable_x == 2,
+    "armor-aware acquisition should lock its highest-ranked exposed hit zone")
+
+director_positions[directed_target].head = Vector3(2.5, 20, 2.1)
+camera_rotation = Vector3.normalize(director_positions[directed_target].head)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.8, 31
+)
+local _, animated_lock_position = mod.get_aim_preview()
+local animated_lock_x, _, animated_lock_z = Vector3.to_elements(animated_lock_position)
+assert(animated_lock_x == 2.5 and animated_lock_z == 2.1,
+    "an active lock should follow the chosen hit zone without cached-position drag")
+
+camera_rotation = Vector3.normalize(director_positions[directed_target].torso)
+orientation.yaw, orientation.pitch = 0, 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.9, 32
+)
+assert(orientation.yaw == 0 and orientation.pitch == 0,
+    "a preferred weakspot leaving FOV should unlock instead of cascading down the body")
+held_action = nil
+prefer_director_head = false
+director_actor = nil
+weapon_action_component.template.actions = nil
+director_positions[directed_target] = nil
+HEALTH_ALIVE[directed_target] = false
+
+local far_melee_target, near_melee_target = {}, {}
+units[far_melee_target] = { breed = "renegade_sniper", position = Vector3(1, 4, 0) }
+units[near_melee_target] = { breed = "renegade_sniper", position = Vector3(1, 2.2, 0) }
+HEALTH_ALIVE[far_melee_target] = true
+hooks["HealthExtension.init"](nil, nil, far_melee_target)
+settings.enable_aim_director = false
+settings.aim_activation = "left_mouse"
+mod.on_setting_changed("enable_aim_director")
+mod.on_setting_changed("aim_activation")
+wielded_slot = "slot_primary"
+weapon_action_component.template.actions = {
+    action_shoot_hip = { weapon_box = { 0.1, 0.1, 1.2 }, range_mod = 1 },
+}
+camera_rotation = Vector3.normalize(Vector3(1, 4, 0))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_one_hold"
+input_values.action_one_hold = true
+parse_network_input(18)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.6, 28
+)
+assert(orientation.yaw == 0 and orientation.pitch == 0,
+    "melee aim should ignore an in-FOV target beyond the current sweep reach")
+
+held_action = nil
+input_values.action_one_hold = false
+parse_network_input(19)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.61, 29
+)
+HEALTH_ALIVE[far_melee_target] = false
+HEALTH_ALIVE[near_melee_target] = true
+hooks["HealthExtension.init"](nil, nil, near_melee_target)
+camera_rotation = Vector3.normalize(Vector3(1, 2.2, 0))
+held_action = "action_one_hold"
+input_values.action_one_hold = true
+parse_network_input(20)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.7, 30
+)
+assert(orientation.yaw < 0,
+    "melee aim should acquire an in-FOV target inside the current sweep reach")
+held_action = nil
+input_values.action_one_hold = false
+parse_network_input(21)
+wielded_slot = "slot_secondary"
+weapon_action_component.template.actions = nil
+settings.enable_aim_director = true
+mod.on_setting_changed("enable_aim_director")
+HEALTH_ALIVE[near_melee_target] = false
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 local companion_hound, companion_gunner = {}, {}
@@ -1152,10 +1583,278 @@ disabling_unit = nil
 disabling_type = "none"
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+local trapper = {}
+units[trapper] = {
+    breed_data = {
+        name = "renegade_netgunner",
+        base_height = 1.8,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(-3, 8, 0),
+}
+HEALTH_ALIVE[trapper] = true
+hooks["HealthExtension.init"](nil, nil, trapper)
+settings.enable_threat_reactions = true
+mod.on_setting_changed("enable_threat_reactions")
+settings.enable_survival_debug = true
+mod.on_setting_changed("enable_survival_debug")
+input_values.action_one_hold = false
+input_values.move_left = false
+held_action = nil
+hooks["BtShootNetAction._start_shooting"]({}, trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 6.4, 64
+)
+input_handler._frame = 64
+parse_network_input(30)
+assert(network_input_cache[6][30] == true and
+    (network_input_cache[7][30] == 1 or network_input_cache[8][30] == 1),
+    "a committed trapper net should network one directional dodge")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 7.1, 71
+)
+
+local physical_trapper = {}
+units[physical_trapper] = {
+    breed_data = units[trapper].breed_data,
+    position = Vector3(3, 8, 0),
+}
+HEALTH_ALIVE[physical_trapper] = true
+hooks["HealthExtension.init"](nil, nil, physical_trapper)
+hooks["BtShootNetAction._start_shooting"]({}, physical_trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 7.2, 72
+)
+input_values.move_left = 1
+input_handler._frame = 72
+parse_network_input(31)
+assert(network_input_cache[6][31] ~= true,
+    "physical movement should suppress defensive automation by default")
+settings.emergency_override = true
+mod.on_setting_changed("emergency_override")
+input_handler._frame = 73
+parse_network_input(32)
+assert(network_input_cache[6][32] == true,
+    "emergency override should allow an imminent defensive reaction")
+input_values.move_left = false
+settings.emergency_override = false
+mod.on_setting_changed("emergency_override")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 8.0, 80
+)
+
+local crusher = {}
+units[crusher] = {
+    breed_data = {
+        name = "chaos_ogryn_executor",
+        base_height = 2.8,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, elite = true },
+    },
+    position = Vector3(0, 3, 0),
+}
+HEALTH_ALIVE[crusher] = true
+hooks["HealthExtension.init"](nil, nil, crusher)
+settings.enable_guard_brain = true
+mod.on_setting_changed("enable_guard_brain")
+settings.enable_threat_reactions = false
+mod.on_setting_changed("enable_threat_reactions")
+hooks["BtShootNetAction._start_shooting"]({}, trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 8.1, 81
+)
+input_handler._frame = 81
+parse_network_input(37)
+assert(network_input_cache[6][37] ~= true,
+    "Guard Brain alone should not enable specialist threat dodges")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 8.8, 88
+)
+wielded_slot = "slot_primary"
+weapon_action_component.template.action_inputs = {
+    block = { input_sequence = { { input = "action_two_hold", value = true } } },
+}
+hooks["BtMeleeAttackAction._start_attack_anim"](
+    {}, crusher, units[crusher].breed_data, player_unit, 9.0, {}, {
+        attack_event = "attack_overhead",
+        attack_timing = 9.6,
+    }
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 9.3, 93
+)
+input_handler._frame = 93
+parse_network_input(33)
+assert(network_input_cache[3][33] == true,
+    "a verified overhead should hold block when melee is equipped")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 10.2, 102
+)
+
+local switch_crusher = {}
+units[switch_crusher] = {
+    breed_data = units[crusher].breed_data,
+    position = Vector3(0, 3, 0),
+}
+HEALTH_ALIVE[switch_crusher] = true
+hooks["HealthExtension.init"](nil, nil, switch_crusher)
+settings.enable_emergency_switch = true
+mod.on_setting_changed("enable_emergency_switch")
+wielded_slot = "slot_secondary"
+hooks["BtMeleeAttackAction._start_attack_anim"](
+    {}, switch_crusher, units[switch_crusher].breed_data, player_unit, 10.3, {}, {
+        attack_event = "attack_overhead",
+        attack_timing = 11.3,
+    }
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 10.8, 108
+)
+input_handler._frame = 108
+parse_network_input(34)
+assert(network_input_cache[9][34] == true,
+    "a safe emergency block should network wield melee first")
+wielded_slot = "slot_primary"
+input_handler._frame = 109
+parse_network_input(35)
+assert(network_input_cache[3][35] == true,
+    "emergency switching should block only after melee is confirmed wielded")
+
+wielded_slot = "slot_secondary"
+hooks["BtMeleeAttackAction._start_attack_anim"](
+    {}, switch_crusher, units[switch_crusher].breed_data, player_unit, 12.0, {}, {
+        attack_event = "attack_overhead",
+        attack_timing = 13.0,
+    }
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 12.5, 125
+)
+input_values.move_left = 1
+input_handler._frame = 133
+parse_network_input(38)
+assert(network_input_cache[6][38] ~= true,
+    "an expired emergency switch must not override physical movement")
+input_values.move_left = false
+
+for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 13.6, 136
+)
+input_handler._frame = 136
+parse_network_input(39)
+local guard_units = { {}, {}, {} }
+local guard_positions = { Vector3(-2, 0, 0), Vector3(2, 0, 0), Vector3(0, 2, 0) }
+for i = 1, #guard_units do
+    units[guard_units[i]] = {
+        breed_data = { name = "renegade_melee", tags = { minion = true } },
+        position = guard_positions[i],
+    }
+    HEALTH_ALIVE[guard_units[i]] = true
+    hooks["HealthExtension.init"](nil, nil, guard_units[i])
+end
+wielded_slot = "slot_primary"
+weapon_action_component.template.action_inputs = {
+    block = { input_sequence = { { input = "action_two_hold", value = true } } },
+}
+stamina_fraction = 0.8
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 20, 200
+)
+input_handler._frame = 200
+parse_network_input(40)
+assert(network_input_cache[3][40] == true and network_input_cache[2][40] ~= true,
+    "Guard Brain should establish block before attempting a push")
+input_handler._frame = 201
+parse_network_input(41)
+assert(network_input_cache[3][41] == true and network_input_cache[2][41] == true,
+    "Guard Brain should send the push attack only after block is established")
+for i = 1, #guard_units do HEALTH_ALIVE[guard_units[i]] = false end
+settings.enable_resource_governor = true
+settings.enable_auto_vent = true
+mod.on_setting_changed("enable_resource_governor")
+mod.on_setting_changed("enable_auto_vent")
+wielded_slot = "slot_unarmed"
+warp_percentage = 0
+local unarmed_ok, unarmed_error = pcall(
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"],
+    first_person_extension, player_unit, 0.1, 13.65, 136
+)
+assert(unarmed_ok, "the governor must ignore a non-heat unarmed slot: " .. tostring(unarmed_error))
+wielded_slot = "slot_secondary"
+warp_percentage = 0.92
+weapon_action_component.template.action_inputs = {
+    vent = { input_sequence = { { input = "weapon_reload_hold", value = true } } },
+}
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 13.7, 137
+)
+input_handler._frame = 137
+parse_network_input(36)
+assert(network_input_cache[12][36] == true,
+    "safe automatic quelling should use the current weapon native vent input")
+
 held_action = "action_one_hold"
 local no_target_ok, no_target_error = pcall(
     hooks["PlayerUnitFirstPersonExtension.fixed_update"],
     first_person_extension, player_unit, 0.1, 1.7, 17
 )
 assert(no_target_ok, "holding aim without a valid target should be a no-op: " .. tostring(no_target_error))
+
+local lifecycle_unit = {}
+units[lifecycle_unit] = {
+    breed_data = {
+        name = "renegade_sniper",
+        base_height = 1.8,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(3, 15, 1),
+}
+HEALTH_ALIVE[lifecycle_unit] = true
+preexisting_units[lifecycle_unit] = true
+local removed_outlines = 0
+current_outline_system = {
+    has_outline = function() return false end,
+    add_outline = function() end,
+    remove_outline = function() removed_outlines = removed_outlines + 1 end,
+}
+hooks["OutlineSystem.init"](current_outline_system)
+settings.enable_outlines = true
+settings.enable_nameplates = true
+mod.on_setting_changed("enable_outlines")
+mod.on_setting_changed("enable_nameplates")
+hooks["HealthExtension.init"](nil, nil, lifecycle_unit)
+local lifecycle_marker = { remove = false }
+local lifecycle_aim_marker = { remove = false }
+mod.marker_refs[lifecycle_unit] = lifecycle_marker
+mod.aim_marker_ref = lifecycle_aim_marker
+mod.on_disabled()
+assert(not mod.enabled and lifecycle_marker.remove and lifecycle_aim_marker.remove
+    and removed_outlines > 0,
+    "disabling the mod should remove every owned marker and outline")
+
+table.clear(marker_events)
+table.clear(aim_marker_events)
+mod.on_enabled()
+assert(mod.enabled and live_world_markers._marker_templates.ballhammer_marker
+    and live_world_markers._marker_templates.ballhammer_aim_marker,
+    "re-enabling should rebind templates to the already-live HUD")
+assert(aim_marker_events[1] and marker_events[1] and marker_events[1].unit == lifecycle_unit,
+    "re-enabling should recreate the preview and rediscover live enemies")
+
+local unload_marker = { remove = false }
+local unload_aim_marker = { remove = false }
+mod.marker_refs[lifecycle_unit] = unload_marker
+mod.aim_marker_ref = unload_aim_marker
+mod.on_unload(false)
+assert(not mod.enabled and unload_marker.remove and unload_aim_marker.remove,
+    "hot reload should tear down owned HUD state before loading the new script")
 print("BallHammer aim smoke: ok")
