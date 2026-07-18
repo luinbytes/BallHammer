@@ -7,7 +7,7 @@ local PlayerUnitVisualLoadout = require(
 local Ammo = require("scripts/utilities/ammo")
 local mod = get_mod("BallHammer")
 
-local MAX_THREATS = 8
+local MAX_THREATS = 1
 local MAX_PLAYERS = 4
 local COMPASS_WIDTH = 520
 local COMPASS_HALF = COMPASS_WIDTH * 0.5 - 24
@@ -20,7 +20,6 @@ local TONE_COLORS = {
     active = { 255, 255, 194, 70 },
     danger = { 255, 255, 82, 82 },
 }
-local BOSS_COLOR = { 255, 210, 100, 255 }
 local CLASS_NAMES = {
     veteran = "Veteran",
     zealot = "Zealot",
@@ -172,12 +171,6 @@ local widgets = {
             style = rect({ 190, 6, 9, 13 }, { 0, 0, 0 }, { 260, 24 }),
         },
         {
-            pass_type = "rect",
-            visibility_function = visible,
-            style_id = "accent",
-            style = rect({ 255, 235, 226, 168 }, { -128, 0, 1 }, { 3, 22 }),
-        },
-        {
             pass_type = "text",
             value = "BALLHAMMER",
             visibility_function = visible,
@@ -215,12 +208,6 @@ for i = 1, 5 do
             visibility_function = visible,
             style_id = "background",
             style = rect({ 150, 7, 10, 14 }, { 0, 0, 0 }, { 260, 22 }),
-        },
-        {
-            pass_type = "rect",
-            visibility_function = visible,
-            style_id = "accent",
-            style = rect({ 255, 128, 137, 148 }, { -128, 0, 1 }, { 3, 20 }),
         },
         {
             pass_type = "text",
@@ -339,6 +326,14 @@ local function extension(unit, name)
     return unit and ScriptUnit.has_extension(unit, name) or nil
 end
 
+local function in_mission()
+    local manager = Managers and Managers.state and Managers.state.game_mode
+    local get_name = manager and manager.game_mode_name
+    if type(get_name) ~= "function" then return false end
+    local ok, name = pcall(get_name, manager)
+    return ok and type(name) == "string" and name ~= "hub"
+end
+
 local function percent(value)
     return math.floor(math.max(0, math.min(1, value or 0)) * 100 + 0.5)
 end
@@ -356,8 +351,6 @@ function BallHammerThreatHud:init(parent, draw_layer, start_scale)
     self._player_candidates = {}
     self._last_opacity = nil
     self._compass_visible = nil
-    self._lane_x = { -math.huge, -math.huge, -math.huge }
-    self._virtual_threat_data = { name = "THREAT", flag = "SPECIAL", companion_danger = 1 }
 end
 
 function BallHammerThreatHud:_apply_opacity(opacity)
@@ -377,13 +370,12 @@ function BallHammerThreatHud:_apply_opacity(opacity)
     for _, name in ipairs({ "status_header", "player_header" }) do
         local style = self._widgets_by_name[name].style
         style.background.color[1] = math.floor(190 * alpha)
-        style.accent.color[1] = math.floor(255 * alpha)
+        if style.accent then style.accent.color[1] = math.floor(255 * alpha) end
         style.text.text_color[1] = math.floor(255 * alpha)
     end
     for i = 1, 5 do
         local style = self._widgets_by_name["status_" .. i].style
         style.background.color[1] = math.floor(150 * alpha)
-        style.accent.color[1] = math.floor(255 * alpha)
         style.label.text_color[1] = math.floor(255 * alpha)
         style.key.text_color[1] = math.floor(255 * alpha)
         style.state.text_color[1] = math.floor(255 * alpha)
@@ -402,6 +394,10 @@ end
 function BallHammerThreatHud:_refresh_status(visible_status)
     local header = self._widgets_by_name.status_header
     header.content.visible = visible_status
+    if not visible_status then
+        for i = 1, 5 do self._widgets_by_name["status_" .. i].content.visible = false end
+        return
+    end
     local rows = mod.get_hud_status_rows()
     for i = 1, 5 do
         local widget = self._widgets_by_name["status_" .. i]
@@ -411,87 +407,36 @@ function BallHammerThreatHud:_refresh_status(visible_status)
         widget.content.key = row.key
         widget.content.state = row.state
         local color = TONE_COLORS[row.tone] or TONE_COLORS.idle
-        set_color(widget.style.accent.color, color, self._opacity_alpha or 1)
         set_color(widget.style.state.text_color, color, self._opacity_alpha or 1)
     end
-end
-
-local function threat_sort(a, b)
-    if a.priority ~= b.priority then return a.priority > b.priority end
-    return a.distance < b.distance
 end
 
 function BallHammerThreatHud:_refresh_threats(range)
     local camera = self._parent and self._parent.player_camera and self._parent:player_camera()
     local camera_position = camera and ScriptCamera.position(camera)
-    local threat_map, active_threat = mod.get_hud_threats()
+    local _, active_threat = mod.get_hud_threats()
     local candidates = self._threat_candidates
-    local count = 0
-    local active_found = false
-    if camera_position then
-        for unit, data in pairs(threat_map) do
-            local position = HEALTH_ALIVE and HEALTH_ALIVE[unit] and unit_position(unit)
-            if position then
-                local distance = Vector3.length(position - camera_position)
-                if distance <= range then
-                    count = count + 1
-                    local candidate = candidates[count]
-                    if not candidate then
-                        candidate = {}
-                        candidates[count] = candidate
-                    end
-                    candidate.unit = unit
-                    candidate.position = nil
-                    candidate.data = data
-                    candidate.distance = distance
-                    candidate.active = active_threat and active_threat.source == unit or false
-                    active_found = active_found or candidate.active
-                    candidate.label = string.format("%s %dm", data.name,
-                        math.floor(distance + 0.5))
-                    candidate.priority = candidate.active and 100
-                        or data.flag == "BOSS" and 60
-                        or (data.companion_danger or 0) * 40
-                end
-            end
-        end
-        if active_threat and not active_found then
-            local source = active_threat.source
-            local position = source and HEALTH_ALIVE and HEALTH_ALIVE[source]
-                and unit_position(source)
-            local boxed_position = active_threat.danger_position
-            if not source and boxed_position then
-                local ok, value = pcall(function() return boxed_position:unbox() end)
-                if ok then position = value end
-            end
-            if position then
-                local distance = Vector3.length(position - camera_position)
-                if distance <= range then
-                    count = count + 1
-                    local candidate = candidates[count]
-                    if not candidate then
-                        candidate = {}
-                        candidates[count] = candidate
-                    end
-                    local data = self._virtual_threat_data
-                    data.name = tostring(active_threat.kind or "THREAT"):gsub("_", " "):upper()
-                    candidate.unit = nil
-                    candidate.position = position
-                    candidate.data = data
-                    candidate.distance = distance
-                    candidate.active = true
-                    candidate.priority = 100
-                    candidate.label = string.format("%s %dm", data.name,
-                        math.floor(distance + 0.5))
-                end
-            end
-        end
-    end
-    for i = count + 1, #candidates do candidates[i] = nil end
-    table.sort(candidates, threat_sort)
     local selected = self._selected_threats
-    local selected_count = math.min(count, MAX_THREATS)
-    for i = 1, selected_count do selected[i] = candidates[i] end
-    for i = selected_count + 1, #selected do selected[i] = nil end
+    selected[1] = nil
+    if not camera_position or not active_threat then return end
+
+    local source = active_threat.source
+    local position = source and HEALTH_ALIVE and HEALTH_ALIVE[source] and unit_position(source)
+    if not source and active_threat.danger_position then
+        local ok, value = pcall(function() return active_threat.danger_position:unbox() end)
+        if ok then position = value end
+    end
+    if not position then return end
+
+    local distance = Vector3.length(position - camera_position)
+    if distance > range then return end
+    local name = tostring(active_threat.kind or "THREAT"):gsub("_", " "):upper()
+    local candidate = candidates[1] or {}
+    candidates[1] = candidate
+    candidate.unit = source
+    candidate.position = source and nil or position
+    candidate.label = string.format("%s %dm", name, math.floor(distance + 0.5))
+    selected[1] = candidate
 end
 
 function BallHammerThreatHud:_update_compass(visible_compass)
@@ -540,38 +485,26 @@ function BallHammerThreatHud:_update_compass(visible_compass)
     end
     for i = count + 1, #display do display[i] = nil end
 
-    local lane_x = self._lane_x
-    lane_x[1], lane_x[2], lane_x[3] = -math.huge, -math.huge, -math.huge
     for i = 1, count do
         local item = display[i]
         local candidate = item.candidate
         local widget = self._widgets_by_name["compass_threat_" .. i]
-        local lane = 1
-        while lane <= 3 and math.abs(item.x - lane_x[lane]) < 100 do lane = lane + 1 end
-        if lane > 3 then
-            widget.content.visible = false
-        else
-            lane_x[lane] = item.x
-            local data = candidate.data
-            local arrow = item.height > 2 and "^" or item.height < -2 and "v" or ""
-            if widget.content.base_label ~= candidate.label or widget.content.arrow ~= arrow then
-                widget.content.base_label = candidate.label
-                widget.content.arrow = arrow
-                widget.content.text = candidate.label .. arrow
-            end
-            widget.content.visible = true
-            widget.offset[1] = item.x
-            widget.offset[2] = (lane - 2) * 18
-            local source = candidate.active and TONE_COLORS.danger
-                or data.flag == "BOSS" and BOSS_COLOR
-                or TONE_COLORS.active
-            local center_fade = math.abs(item.x) < COMPASS_HALF * 0.25 and 0.72 or 1
-            local edge_fade = 1 - math.max(0, math.abs(item.x) / COMPASS_HALF - 0.8) * 2.5
-            local alpha = math.max(0.35, center_fade * edge_fade)
-                * (self._opacity_alpha or 1)
-            set_color(widget.style.pip.color, source, alpha)
-            set_color(widget.style.text.text_color, source, alpha)
+        local arrow = item.height > 2 and "^" or item.height < -2 and "v" or ""
+        if widget.content.base_label ~= candidate.label or widget.content.arrow ~= arrow then
+            widget.content.base_label = candidate.label
+            widget.content.arrow = arrow
+            widget.content.text = candidate.label .. arrow
         end
+        widget.content.visible = true
+        widget.offset[1] = item.x
+        widget.offset[2] = 0
+        local source = TONE_COLORS.danger
+        local center_fade = math.abs(item.x) < COMPASS_HALF * 0.25 and 0.72 or 1
+        local edge_fade = 1 - math.max(0, math.abs(item.x) / COMPASS_HALF - 0.8) * 2.5
+        local alpha = math.max(0.35, center_fade * edge_fade)
+            * (self._opacity_alpha or 1)
+        set_color(widget.style.pip.color, source, alpha)
+        set_color(widget.style.text.text_color, source, alpha)
     end
     for i = count + 1, MAX_THREATS do
         self._widgets_by_name["compass_threat_" .. i].content.visible = false
@@ -683,7 +616,7 @@ end
 
 function BallHammerThreatHud:update(dt, t, ui_renderer, render_settings, input_service)
     BallHammerThreatHud.super.update(self, dt, t, ui_renderer, render_settings, input_service)
-    local enabled = mod.enabled == true
+    local enabled = mod.enabled == true and in_mission()
     local show_status, show_compass, compass_range, show_players, opacity = mod.get_hud_settings()
     show_status, show_compass, show_players = enabled and show_status,
         enabled and show_compass, enabled and show_players
@@ -693,6 +626,13 @@ function BallHammerThreatHud:update(dt, t, ui_renderer, render_settings, input_s
     local threat_text = enabled and mod.get_threat_indicator() or nil
     threat_content.text = threat_text or ""
     threat_content.visible = threat_text ~= nil
+
+    if not enabled then
+        self:_refresh_status(false)
+        self:_update_compass(false)
+        self:_refresh_players(false)
+        return
+    end
 
     if t < self._next_status_t - 1 then self._next_status_t = 0 end
     if t >= self._next_status_t then

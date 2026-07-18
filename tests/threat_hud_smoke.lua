@@ -14,7 +14,7 @@ local threat_data = {
         companion_danger = 1,
     },
 }
-local active_threat = { source = threat_unit }
+local active_threat = { source = threat_unit, kind = "mutant" }
 local status_rows = {
     { label = "AIM", key = "LMB", state = "LOCKED", tone = "active" },
     { label = "TRIGGER", key = "RMB", state = "FIRING", tone = "danger" },
@@ -121,7 +121,12 @@ local player = {
     unit_is_alive = function() return true end,
 }
 local camera = { position = vector(0, 0, 0) }
-Managers = { player = {
+local game_mode_name = "coop_complete_objective"
+Managers = {
+    state = { game_mode = {
+        game_mode_name = function() return game_mode_name end,
+    } },
+    player = {
     players = function() return { one = player } end,
     local_player = function() return player end,
 } }
@@ -168,10 +173,13 @@ assert(element._widgets_by_name.threat.content.visible
 assert(element._widgets_by_name.status_header.content.visible
     and element._widgets_by_name.status_2.content.state == "FIRING",
     "system panel should render configured keys and live states")
+assert(element._widgets_by_name.status_header.style.accent == nil
+    and element._widgets_by_name.status_1.style.accent == nil,
+    "system status rows should not render decorative state ticks")
 assert(element._widgets_by_name.compass.content.visible
     and element._widgets_by_name.compass_threat_1.content.visible
     and element._widgets_by_name.compass_threat_1.offset[1] > 0
-    and element._widgets_by_name.compass_threat_1.content.text:find("Mutant", 1, true),
+    and element._widgets_by_name.compass_threat_1.content.text:find("MUTANT", 1, true),
     "threat compass should project a named threat to its camera-relative bearing")
 assert(element._widgets_by_name.player_header.content.visible
     and element._widgets_by_name.player_1.content.name == "Veteran"
@@ -179,7 +187,6 @@ assert(element._widgets_by_name.player_header.content.visible
     and element._widgets_by_name.player_1.content.stats:find("AMMO 50%%"),
     "squad list should render native health, toughness, ammo, and grenade data")
 assert(element._widgets_by_name.status_1.style.label.text_color[1] == 204
-    and element._widgets_by_name.status_1.style.accent.color[1] == 204
     and element._widgets_by_name.compass.style.line.color[1] == 144
     and element._widgets_by_name.player_1.style.stats.text_color[1] == 188,
     "shared HUD opacity should apply to text, accents, and compass surfaces")
@@ -197,13 +204,10 @@ for i = 1, #crowded_units do
 end
 element:update(0.016, 1.2, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.content.visible
-    and element._widgets_by_name.compass_threat_2.content.visible
-    and element._widgets_by_name.compass_threat_3.content.visible
-    and not element._widgets_by_name.compass_threat_4.content.visible
-    and element._widgets_by_name.compass_threat_1.content.text:find("Mutant", 1, true)
-    and math.abs(element._widgets_by_name.compass_threat_1.offset[2]
-        - element._widgets_by_name.compass_threat_2.offset[2]) >= 18,
-    "compass overflow should keep the active threat in three non-overlapping lanes")
+    and element._widgets_by_name.compass_threat_2 == nil
+    and element._widgets_by_name.compass_threat_1.content.text:find("MUTANT", 1, true)
+    and element._widgets_by_name.compass_threat_1.offset[2] == 0,
+    "threat compass should show only the committed threat")
 for i = 1, #crowded_units do
     threat_data[crowded_units[i]] = nil
     HEALTH_ALIVE[crowded_units[i]] = false
@@ -229,9 +233,32 @@ element:update(0.016, 1.56, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.content.text:find("GRENADE", 1, true),
     "committed position-only threats should remain visible on the compass")
 
+local unmapped_threat = {}
+positions[unmapped_threat] = vector(4, 6, 0)
+ALIVE[unmapped_threat], HEALTH_ALIVE[unmapped_threat] = true, true
+active_threat = { source = unmapped_threat, kind = "rager" }
+element:update(0.016, 1.7, nil, {}, nil)
+assert(element._widgets_by_name.compass_threat_1.content.text:find("RAGER", 1, true),
+    "committed threats should not depend on ESP metadata")
+
+game_mode_name = "hub"
+element:update(0.016, 1.71, nil, {}, nil)
+assert(not element._widgets_by_name.threat.content.visible
+    and not element._widgets_by_name.status_header.content.visible
+    and not element._widgets_by_name.compass.content.visible
+    and not element._widgets_by_name.compass_threat_1.content.visible
+    and not element._widgets_by_name.player_header.content.visible,
+    "the tactical HUD should hide immediately in the Mourningstar")
+
+game_mode_name = nil
+element:update(0.016, 1.72, nil, {}, nil)
+assert(not element._widgets_by_name.compass.content.visible,
+    "the tactical HUD should stay hidden while game mode state is unavailable")
+
+game_mode_name = "coop_complete_objective"
 threat_text = nil
 show_status, show_compass, show_players = false, false, false
-element:update(0.016, 1.7, nil, {}, nil)
+element:update(0.016, 2.0, nil, {}, nil)
 assert(not element._widgets_by_name.threat.content.visible
     and not element._widgets_by_name.status_header.content.visible
     and not element._widgets_by_name.compass.content.visible

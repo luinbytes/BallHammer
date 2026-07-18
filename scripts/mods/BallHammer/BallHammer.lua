@@ -889,7 +889,7 @@ mod:hook_safe(CLASS.OutlineSystem, "on_add_extension", function(self, world, uni
 end)
 
 mod:hook_safe(CLASS.OutlineSystem, "on_remove_extension", function(self, unit, extension_name)
-    if active_threat and active_threat.source == unit then clear_active_threat() end
+    if active_threat and active_threat.source == unit then clear_active_threat(true) end
     kill_marker(unit)
     kill_horde_marker(unit)
     unit_data_map[unit] = nil
@@ -1658,9 +1658,9 @@ local function set_threat_marker(threat, text)
     if data then data.threat_text = enable_threat_markers and text or nil end
 end
 
-clear_active_threat = function()
+clear_active_threat = function(cancel_request)
     set_threat_marker(active_threat, nil)
-    if requested_defense and active_threat
+    if cancel_request and requested_defense and active_threat
         and requested_defense.source == active_threat.source then
         requested_defense = nil
     end
@@ -1687,7 +1687,7 @@ local function register_threat(
     if exact_reaction_t and active_threat and active_threat.source == source
         and active_threat.kind == kind and active_threat.reacted
         and impact_t > active_threat.impact_t + 0.1 then
-        clear_active_threat()
+        clear_active_threat(true)
     end
     if active_threat and active_threat.source == source and active_threat.kind == kind then
         active_threat.impact_t = math.min(active_threat.impact_t, impact_t)
@@ -1714,7 +1714,7 @@ local function register_threat(
     }
     local chosen = Survival.prefer_threat(active_threat, candidate)
     if chosen ~= active_threat then
-        clear_active_threat()
+        clear_active_threat(true)
         active_threat = candidate
         active_threat.reaction_t = exact_reaction_t or Survival.reaction_time(
             kind, commit_t, impact_t, reaction_timing
@@ -1761,13 +1761,19 @@ local function defensive_move_action(threat, first_person)
     return side >= 0 and "move_right" or "move_left"
 end
 
+local function enemy_targets_player(unit, player_unit)
+    local blackboard = BLACKBOARDS and BLACKBOARDS[unit]
+    local perception = blackboard and blackboard.perception
+    return perception and perception.target_unit == player_unit
+        or replicated_target(unit) == player_unit
+end
+
 local function nearby_enemy_geometry(player_position, radius)
     local distances, quadrants = {}, {}
+    local player_unit = local_player_unit()
     for unit in pairs(aim_target_map) do
         if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
-            local blackboard = BLACKBOARDS and BLACKBOARDS[unit]
-            local perception = blackboard and blackboard.perception
-            local behavior = perception and perception.target_unit == local_player_unit()
+            local behavior = enemy_targets_player(unit, player_unit)
                 and ScriptUnit.has_extension(unit, "behavior_system")
             local running_action = behavior and behavior.running_action
             local ok, action = false, nil
@@ -1798,9 +1804,7 @@ end
 local function has_active_ranged_attack(player_unit)
     for unit in pairs(aim_target_map) do
         if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
-            local blackboard = BLACKBOARDS and BLACKBOARDS[unit]
-            local perception = blackboard and blackboard.perception
-            if perception and perception.target_unit == player_unit then
+            if enemy_targets_player(unit, player_unit) then
                 local behavior = ScriptUnit.has_extension(unit, "behavior_system")
                 local running_action = behavior and behavior.running_action
                 local ok, action = false, nil
@@ -2297,7 +2301,7 @@ mod:hook("HumanInputHandler", "_parse_input", function(
         end
     end
 
-    apply_survival_input(lookup, input_cache, index, t)
+    apply_survival_input(lookup, input_cache, index, t or survival_t)
 
     local generated_fire = requested_auto_fire_mode and t and requested_auto_fire_until
         and t <= requested_auto_fire_until

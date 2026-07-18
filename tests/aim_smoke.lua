@@ -1862,9 +1862,14 @@ parse_network_input(42)
 assert(network_input_cache[6][42] ~= true,
     "physical attacks should be preserved until the final safe dodge window")
 input_handler._frame = 140
+Managers.state.game_session.fixed_time_step = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.0, 140
+)
 parse_network_input(46)
 assert(network_input_cache[6][46] == true,
-    "an imminent multiplayer mutant must dodge even while an attack is held")
+    "an imminent multiplayer mutant must dodge even when parser time is unavailable")
+Managers.state.game_session.fixed_time_step = 0.1
 input_values.action_one_hold = false
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
@@ -2192,6 +2197,30 @@ assert(mod.get_hud_status_rows()[4].state == "READY",
 HEALTH_ALIVE[removed_trapper] = false
 HEALTH_ALIVE[unknown_elite] = false
 
+do
+    local delayed_trapper = {}
+    units[delayed_trapper] = {
+        breed_data = units[trapper].breed_data,
+        position = Vector3(0, 7, 0),
+    }
+    HEALTH_ALIVE[delayed_trapper] = true
+    hooks["HealthExtension.init"](nil, nil, delayed_trapper)
+    hooks["BtShootNetAction._start_shooting"]({}, delayed_trapper, {
+        perception_component = { target_unit = player_unit },
+    })
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 28.31, 283
+    )
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 28.46, 284
+    )
+    input_handler._frame = 285
+    parse_network_input(63)
+    assert(network_input_cache[6][63] == true,
+        "an input queued inside the dodge window must survive threat display expiry")
+    HEALTH_ALIVE[delayed_trapper] = false
+end
+
 local guard_units = { {}, {}, {} }
 local guard_positions = { Vector3(-2, 0, 0), Vector3(2, 0, 0), Vector3(0, 2, 0) }
 for i = 1, #guard_units do
@@ -2216,7 +2245,11 @@ input_handler._frame = 300
 parse_network_input(60)
 assert(network_input_cache[3][60] ~= true and network_input_cache[2][60] ~= true,
     "Guard Brain should ignore nearby enemies that are only shooting")
-for i = 1, #guard_units do units[guard_units[i]].running_action = "bt_melee_attack_action" end
+for i = 1, #guard_units do
+    BLACKBOARDS[guard_units[i]] = nil
+    set_replicated_fields(guard_units[i], { target_unit_id = 1 })
+    units[guard_units[i]].running_action = "bt_melee_attack_action"
+end
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 30.1, 301
 )
