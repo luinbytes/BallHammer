@@ -5,14 +5,46 @@ local DODGE_THREATS = {
     hound = true,
     trapper = true,
     mutant = true,
+    rager = true,
     sniper = true,
     flamer = true,
     grenade = true,
+    overhead = true,
+}
+local DODGE_WINDOWS = {
+    mutant = { 0.18, 0.35 },
+    hound = { 0.18, 0.38 },
+    trapper = { 0.12, 0.28 },
+    rager = { 0.14, 0.28 },
+    sniper = { 0.12, 0.28 },
+    flamer = { 0.12, 0.28 },
+    grenade = { 0.15, 0.35 },
+    overhead = { 0.18, 0.55 },
 }
 
 function Survival.safe_timing(start_t, end_t, timing)
     if not start_t or not end_t or end_t < start_t then return nil end
     return start_t + (end_t - start_t) * math.max(0, math.min(100, timing or 50)) / 100
+end
+
+function Survival.reaction_time(kind, start_t, impact_t, timing)
+    local preferred = Survival.safe_timing(start_t, impact_t, timing)
+    local window = DODGE_WINDOWS[kind]
+    if not preferred or not window then return preferred end
+    return math.max(impact_t - window[2], math.min(impact_t - window[1], preferred))
+end
+
+function Survival.charge_impact_time(dx, dy, vx, vy, min_speed, max_time, miss_radius)
+    min_speed = min_speed or 7
+    max_time = max_time or 1.25
+    miss_radius = miss_radius or 1.5
+    local speed_squared = vx * vx + vy * vy
+    if speed_squared < min_speed * min_speed then return nil end
+    local impact_t = (dx * vx + dy * vy) / speed_squared
+    if impact_t < 0 or impact_t > max_time then return nil end
+    local miss_x, miss_y = dx - vx * impact_t, dy - vy * impact_t
+    return miss_x * miss_x + miss_y * miss_y <= miss_radius * miss_radius
+        and impact_t or nil
 end
 
 function Survival.prefer_threat(current, candidate)
@@ -29,13 +61,6 @@ end
 function Survival.reaction(threat, context)
     context = context or {}
     if DODGE_THREATS[threat and threat.kind] then return "dodge" end
-    if threat and threat.kind == "overhead" then
-        if context.can_block then return "block" end
-        if context.can_switch and (threat.time_left or 0) >= (context.switch_lead or math.huge) then
-            return "switch_block"
-        end
-        return "dodge"
-    end
     return "marker"
 end
 

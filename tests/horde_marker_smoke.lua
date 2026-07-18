@@ -128,6 +128,10 @@ assert(markers[1].widget.content.label == "Horde x4",
 
 for _, position in pairs(units[markers[4].unit].nodes) do position.screen_x = -100 end
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 2)
+assert(markers[1].widget.content.label == "Horde x4",
+    "horde members should remain counted inside the expanded edge buffer")
+for _, position in pairs(units[markers[4].unit].nodes) do position.screen_x = -180 end
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 2.1)
 assert(markers[1].widget.content.label == "Horde x3",
     "horde count should still decrease after a member leaves the edge buffer")
 print("BallHammer horde marker smoke: ok")

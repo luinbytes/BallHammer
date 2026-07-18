@@ -92,6 +92,9 @@ local settings = {
     enable_nameplates = false,
     enable_horde_esp = true,
     enable_pickup_esp = true,
+    pickup_filter = "all",
+    pickup_show_plasteel = true,
+    pickup_show_med_stimm = true,
     horde_distance = 80,
     pickup_distance = 80,
     max_distance = 80,
@@ -136,6 +139,7 @@ local settings = {
 }
 local messages = {}
 local hooks = {}
+WwiseWorld = {}
 local parsed_fire_pressed = false
 local shot_ready = false
 local recoil_calls = 0
@@ -215,6 +219,7 @@ package.preload["scripts/extension_systems/action_input/action_input_parser"] = 
 end
 local mod = {
     get = function(_, key) return settings[key] end,
+    register_hud_element = function() return true end,
     io_dofile = function(_, path)
         if path:find("BallHammerSurvival") then
             return dofile("scripts/mods/BallHammer/BallHammerSurvival.lua")
@@ -229,6 +234,8 @@ local mod = {
     hook_safe = function(_, object, method, handler)
         if type(object) == "string" then
             hooks[object .. "." .. method] = handler
+        elseif object == WwiseWorld then
+            hooks["WwiseWorld." .. method] = handler
         elseif CLASS and object == CLASS.OutlineSystem then
             hooks["OutlineSystem." .. method] = handler
         end
@@ -284,6 +291,7 @@ local aim_marker_events = {}
 local held_action = "action_one_hold"
 local preexisting_units = {}
 local preexisting_pickups = {}
+luggable_socket_units = {}
 local smart_direct_target
 local smart_target_updates = 0
 local companion_can_order = false
@@ -323,6 +331,31 @@ local warp_percentage = 0
 local heat_percentage = 0
 local current_outline_system = nil
 local live_world_markers = { _marker_templates = {} }
+test_game_session = {}
+replicated_fields = setmetatable({}, { __mode = "k" })
+unit_ids = setmetatable({}, { __mode = "k" })
+id_units = {}
+next_unit_id = 2
+unit_ids[player_unit] = 1
+id_units[1] = player_unit
+GameSession = {
+    has_game_object_field = function(_, object_id, field)
+        local unit = id_units[object_id]
+        return unit and replicated_fields[unit]
+            and replicated_fields[unit][field] ~= nil or false
+    end,
+    game_object_field = function(_, object_id, field)
+        return replicated_fields[id_units[object_id]][field]
+    end,
+}
+function set_replicated_fields(unit, fields)
+    if not unit_ids[unit] then
+        unit_ids[unit] = next_unit_id
+        id_units[next_unit_id] = unit
+        next_unit_id = next_unit_id + 1
+    end
+    replicated_fields[unit] = fields
+end
 local weapon_extension = {
     action_input_is_currently_valid = function() return shot_ready end,
     recoil_template = function() return {} end,
@@ -349,7 +382,15 @@ Managers = {
         end,
     },
     state = {
-        game_session = { fixed_time_step = 0.1 },
+        game_session = {
+            fixed_time_step = 0.1,
+            game_session = function() return test_game_session end,
+            is_server = function() return false end,
+        },
+        unit_spawner = {
+            game_object_id = function(_, unit) return unit_ids[unit] end,
+            unit = function(_, id) return id_units[id] end,
+        },
         camera = {
             camera = function(_, viewport_name)
                 assert(viewport_name == "player_1")
@@ -368,6 +409,9 @@ Managers = {
             end,
             system = function(_, name)
                 if name == "outline_system" then return current_outline_system end
+                if name == "luggable_socket_system" then
+                    return { socket_units = function() return luggable_socket_units end }
+                end
                 if name == "smart_tag_system" then
                     return {
                         set_contextual_unit_tag = function(_, tagger, target, alternate)
@@ -466,6 +510,15 @@ ScriptUnit = {
                     return { yaw_offset = 0, pitch_offset = 0, offset_x = 0, offset_y = 0 }
                 end,
             }
+        end
+        if system == "health_station_system" then
+            return units[unit].health_station and {} or nil
+        end
+        if system == "luggable_socket_system" and units[unit].socketed_unit then
+            return { socketed_unit = function() return units[unit].socketed_unit end }
+        end
+        if system == "locomotion_system" and units[unit].velocity then
+            return { current_velocity = function() return units[unit].velocity end }
         end
         if system == "health_system" then
             return {
@@ -617,8 +670,32 @@ ALIVE[plasteel_pickup] = true
 preexisting_pickups[plasteel_pickup] = true
 for frame = 1, 60 do hooks["HudElementWorldMarkers.update"]({}, 0.016, frame * 0.016) end
 assert(marker_events[1] and marker_events[1].marker_name == "ballhammer_pickup_marker"
-    and marker_events[1].data.name == "Plasteel",
+    and marker_events[1].data.name == "Plasteel"
+    and marker_events[1].data.category == "materials"
+    and marker_events[1].data.filter_id == "plasteel",
     "pickup ESP should discover and classify materials that predate a hot reload")
+health_station_socket = {}
+socketed_station_battery = {}
+units[health_station_socket] = {
+    socketed_unit = socketed_station_battery,
+    position = Vector3(1, 6, 0),
+}
+units[socketed_station_battery] = {
+    pickup_type = "battery_01_luggable",
+    position = Vector3(1, 6, 0),
+}
+luggable_socket_units[1] = health_station_socket
+hooks["InteracteeExtension.init"](nil, nil, socketed_station_battery)
+assert(#marker_events == 1,
+    "pickup ESP should ignore a battery locked into a medicae station socket")
+loose_battery = {}
+units[loose_battery] = {
+    pickup_type = "battery_01_luggable",
+    position = Vector3(1, 6, 0),
+}
+hooks["InteracteeExtension.init"](nil, nil, loose_battery)
+assert(#marker_events == 2 and marker_events[2].data.name == "Battery 01 Luggable",
+    "pickup ESP should preserve loose mission batteries")
 local stimm_names = {
     syringe_corruption_pocketable = "Med Stimm",
     syringe_ability_boost_pocketable = "Concentration Stimm",
@@ -631,7 +708,27 @@ for pickup_type, expected_name in pairs(stimm_names) do
     hooks["InteracteeExtension.init"](nil, nil, stimm)
     assert(marker_events[#marker_events].data.name == expected_name,
         pickup_type .. " should display its real stimm type")
+    assert(marker_events[#marker_events].data.category == "stimms",
+        pickup_type .. " should use the stimm pickup filter category")
+    assert(marker_events[#marker_events].data.filter_id,
+        pickup_type .. " should expose an individual custom-filter id")
 end
+settings.pickup_filter = "stimms"
+mod.on_setting_changed("pickup_filter")
+assert(not mod.get_pickup_visible({ category = "materials" })
+    and mod.get_pickup_visible({ category = "stimms" }),
+    "pickup filter changes should apply immediately to classified marker data")
+settings.pickup_filter = "all"
+mod.on_setting_changed("pickup_filter")
+settings.pickup_filter = "custom"
+settings.pickup_show_plasteel = false
+mod.on_setting_changed("pickup_show_plasteel")
+assert(not mod.get_pickup_visible({ category = "materials", filter_id = "plasteel" })
+    and mod.get_pickup_visible({ category = "stimms", filter_id = "med_stimm" }),
+    "custom pickup filters should apply each pickup toggle live")
+settings.pickup_show_plasteel = true
+settings.pickup_filter = "all"
+mod.on_setting_changed("pickup_filter")
 table.clear(preexisting_pickups)
 settings.enable_pickup_esp = false
 mod.on_setting_changed("enable_pickup_esp")
@@ -1649,17 +1746,9 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 input_values.move_left = 1
 input_handler._frame = 72
 parse_network_input(31)
-assert(network_input_cache[6][31] ~= true,
-    "physical movement should suppress defensive automation by default")
-settings.emergency_override = true
-mod.on_setting_changed("emergency_override")
-input_handler._frame = 73
-parse_network_input(32)
-assert(network_input_cache[6][32] == true,
-    "emergency override should allow an imminent defensive reaction")
+assert(network_input_cache[6][31] == true and network_input_cache[7][31] == 1,
+    "ordinary movement should preserve its direction and still accept a defensive dodge")
 input_values.move_left = false
-settings.emergency_override = false
-mod.on_setting_changed("emergency_override")
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 8.0, 80
 )
@@ -1678,6 +1767,8 @@ HEALTH_ALIVE[crusher] = true
 hooks["HealthExtension.init"](nil, nil, crusher)
 settings.enable_guard_brain = true
 mod.on_setting_changed("enable_guard_brain")
+settings.enable_survival_debug = false
+mod.on_setting_changed("enable_survival_debug")
 settings.enable_threat_reactions = false
 mod.on_setting_changed("enable_threat_reactions")
 hooks["BtShootNetAction._start_shooting"]({}, trapper, {
@@ -1699,17 +1790,17 @@ weapon_action_component.template.action_inputs = {
 }
 hooks["BtMeleeAttackAction._start_attack_anim"](
     {}, crusher, units[crusher].breed_data, player_unit, 9.0, {}, {
-        attack_event = "attack_overhead",
+        attack_event = "attack_01",
         attack_timing = 9.6,
-    }
+    }, { aoe_threat_timing = 0.3 }
 )
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 9.3, 93
 )
 input_handler._frame = 93
 parse_network_input(33)
-assert(network_input_cache[3][33] == true,
-    "a verified overhead should hold block when melee is equipped")
+assert(network_input_cache[6][33] == true,
+    "a verified overhead should dodge instead of trying to block bypass damage")
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 10.2, 102
 )
@@ -1735,37 +1826,280 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 )
 input_handler._frame = 108
 parse_network_input(34)
-assert(network_input_cache[9][34] == true,
-    "a safe emergency block should network wield melee first")
-wielded_slot = "slot_primary"
+assert(network_input_cache[6][34] == true and network_input_cache[9][34] ~= true,
+    "an overhead should dodge without wasting time switching to melee")
 input_handler._frame = 109
 parse_network_input(35)
-assert(network_input_cache[3][35] == true,
-    "emergency switching should block only after melee is confirmed wielded")
+assert(network_input_cache[3][35] ~= true and network_input_cache[9][35] ~= true,
+    "an overhead reaction must never fall back to block or weapon switching")
 
-wielded_slot = "slot_secondary"
-hooks["BtMeleeAttackAction._start_attack_anim"](
-    {}, switch_crusher, units[switch_crusher].breed_data, player_unit, 12.0, {}, {
-        attack_event = "attack_overhead",
-        attack_timing = 13.0,
-    }
+multiplayer_mutant = {}
+units[multiplayer_mutant] = {
+    breed_data = {
+        name = "cultist_mutant",
+        base_height = 2.4,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+    velocity = Vector3(0, -8, 0),
+}
+HEALTH_ALIVE[multiplayer_mutant] = true
+hooks["HealthExtension.init"](nil, nil, multiplayer_mutant)
+settings.enable_threat_reactions = true
+mod.on_setting_changed("enable_threat_reactions")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 13.1, 131
 )
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
-    first_person_extension, player_unit, 0.1, 12.5, 125
+    first_person_extension, player_unit, 0.1, 13.8, 138
 )
-input_values.move_left = 1
-input_handler._frame = 133
-parse_network_input(38)
-assert(network_input_cache[6][38] ~= true,
-    "an expired emergency switch must not override physical movement")
-input_values.move_left = false
+input_handler._frame = 138
+input_values.action_one_hold = true
+parse_network_input(42)
+assert(network_input_cache[6][42] ~= true,
+    "physical attacks should be preserved until the final safe dodge window")
+input_handler._frame = 140
+parse_network_input(46)
+assert(network_input_cache[6][46] == true,
+    "an imminent multiplayer mutant must dodge even while an attack is held")
+input_values.action_one_hold = false
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
-    first_person_extension, player_unit, 0.1, 13.6, 136
+    first_person_extension, player_unit, 0.1, 14.5, 145
 )
-input_handler._frame = 136
+input_handler._frame = 145
 parse_network_input(39)
+multiplayer_rager = {}
+units[multiplayer_rager] = {
+    breed_data = {
+        name = "cultist_berzerker",
+        base_height = 1.9,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, elite = true },
+    },
+    position = Vector3(0, 3, 0),
+}
+HEALTH_ALIVE[multiplayer_rager] = true
+set_replicated_fields(multiplayer_rager, { target_unit_id = 1 })
+hooks["HealthExtension.init"](nil, nil, multiplayer_rager)
+wielded_slot = "slot_secondary"
+assert(hooks["AnimationSystem.rpc_minion_anim_event"] == nil,
+    "generic replicated animation events must not be treated as melee attacks")
+hooks["WwiseWorld.trigger_resource_event"](
+    {}, "wwise/events/weapon/play_minion_swing_1h_sword_elite"
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.6, 146
+)
+input_handler._frame = 146
+parse_network_input(43)
+assert(network_input_cache[6][43] == true
+    and (network_input_cache[7][43] == 1 or network_input_cache[8][43] == 1),
+    "a multiplayer rager swing cue should trigger a lateral dodge")
+hooks["BtMeleeAttackAction._start_attack_anim"](
+    {}, multiplayer_rager, units[multiplayer_rager].breed_data, player_unit, 15.1, {}, {
+        attack_event = "attack_combo",
+        attack_timing = 15.8,
+        dodge_window = 15.3,
+    }
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 15.2, 152
+)
+input_handler._frame = 152
+parse_network_input(56)
+assert(network_input_cache[6][56] ~= true,
+    "an authoritative melee attack must not dodge before Darktide's own window")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 15.4, 154
+)
+input_handler._frame = 154
+parse_network_input(57)
+assert(network_input_cache[6][57] == true,
+    "an authoritative melee attack should dodge inside Darktide's own window")
+HEALTH_ALIVE[multiplayer_rager] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 16.5, 165
+)
+input_handler._frame = 165
+parse_network_input(45)
+NetworkLookup = {
+    sound_events = {
+        [501] = "wwise/events/minions/play_weapon_netgunner",
+        [502] = "wwise/events/weapon/play_special_sniper_flash",
+    },
+    effect_templates = { [601] = "renegade_grenadier_grenade" },
+    player_character_sounds = {},
+}
+
+multiplayer_hound = {}
+units[multiplayer_hound] = {
+    breed_data = {
+        name = "chaos_hound",
+        base_height = 1.2,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+    velocity = Vector3(0, -12, 0),
+}
+HEALTH_ALIVE[multiplayer_hound] = true
+set_replicated_fields(multiplayer_hound, { target_unit_id = 1 })
+hooks["HealthExtension.init"](nil, nil, multiplayer_hound)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 17.0, 170
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 17.4, 174
+)
+input_handler._frame = 174
+parse_network_input(46)
+assert(network_input_cache[6][46] == true,
+    "a replicated multiplayer hound leap should network a directional dodge")
+HEALTH_ALIVE[multiplayer_hound] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 18.6, 186
+)
+input_handler._frame = 186
+parse_network_input(47)
+
+multiplayer_flamer = {}
+units[multiplayer_flamer] = {
+    breed_data = {
+        name = "renegade_flamer",
+        base_height = 1.9,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+}
+HEALTH_ALIVE[multiplayer_flamer] = true
+set_replicated_fields(multiplayer_flamer, {
+    target_unit_id = 1,
+    state = 3,
+    aim_position = Vector3(0, 0, 0),
+})
+hooks["HealthExtension.init"](nil, nil, multiplayer_flamer)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 19.0, 190
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 19.2, 192
+)
+input_handler._frame = 192
+parse_network_input(48)
+assert(network_input_cache[6][48] == true,
+    "a replicated multiplayer flamer beam should network a directional dodge")
+HEALTH_ALIVE[multiplayer_flamer] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 20.0, 200
+)
+input_handler._frame = 200
+parse_network_input(49)
+
+multiplayer_sniper = {}
+units[multiplayer_sniper] = {
+    breed_data = {
+        name = "renegade_sniper",
+        base_height = 1.9,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 20, 0),
+}
+HEALTH_ALIVE[multiplayer_sniper] = true
+set_replicated_fields(multiplayer_sniper, {
+    target_unit_id = 1,
+})
+hooks["HealthExtension.init"](nil, nil, multiplayer_sniper)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 21.0, 210
+)
+hooks["FxSystem.rpc_trigger_wwise_event"](
+    {}, 0, 502, Vector3(0, 20, 0)
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 21.3, 213
+)
+input_handler._frame = 213
+parse_network_input(50)
+assert(network_input_cache[6][50] == true,
+    "a replicated multiplayer sniper aim should network a directional dodge")
+HEALTH_ALIVE[multiplayer_sniper] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 22.1, 221
+)
+input_handler._frame = 221
+parse_network_input(51)
+
+multiplayer_trapper = {}
+units[multiplayer_trapper] = {
+    breed_data = {
+        name = "renegade_netgunner",
+        base_height = 1.9,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+}
+HEALTH_ALIVE[multiplayer_trapper] = true
+set_replicated_fields(multiplayer_trapper, { target_unit_id = 1 })
+hooks["HealthExtension.init"](nil, nil, multiplayer_trapper)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 23.0, 230
+)
+hooks["MinionFxExtension.rpc_trigger_minion_inventory_wwise_event"](
+    { _unit = multiplayer_trapper }, 0, unit_ids[multiplayer_trapper], 501, 0, 0, 1
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 23.2, 232
+)
+input_handler._frame = 232
+parse_network_input(52)
+assert(network_input_cache[6][52] == true,
+    "a replicated multiplayer trapper shot should network a directional dodge")
+HEALTH_ALIVE[multiplayer_trapper] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 24.0, 240
+)
+input_handler._frame = 240
+parse_network_input(53)
+
+multiplayer_grenadier = {}
+units[multiplayer_grenadier] = {
+    breed_data = {
+        name = "renegade_grenadier",
+        base_height = 1.9,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 10, 0),
+}
+HEALTH_ALIVE[multiplayer_grenadier] = true
+set_replicated_fields(multiplayer_grenadier, { target_unit_id = 1 })
+hooks["HealthExtension.init"](nil, nil, multiplayer_grenadier)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 25.0, 250
+)
+hooks["FxSystem.rpc_start_template_effect"](
+    {}, 0, 0, 601, unit_ids[multiplayer_grenadier]
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 25.3, 253
+)
+input_handler._frame = 253
+parse_network_input(54)
+assert(network_input_cache[6][54] == true,
+    "a replicated multiplayer grenade windup should network a directional dodge")
+HEALTH_ALIVE[multiplayer_grenadier] = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 26.2, 262
+)
+input_handler._frame = 262
+parse_network_input(55)
+
 local guard_units = { {}, {}, {} }
 local guard_positions = { Vector3(-2, 0, 0), Vector3(2, 0, 0), Vector3(0, 2, 0) }
 for i = 1, #guard_units do
@@ -1782,13 +2116,13 @@ weapon_action_component.template.action_inputs = {
 }
 stamina_fraction = 0.8
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
-    first_person_extension, player_unit, 0.1, 20, 200
+    first_person_extension, player_unit, 0.1, 30, 300
 )
-input_handler._frame = 200
+input_handler._frame = 300
 parse_network_input(40)
 assert(network_input_cache[3][40] == true and network_input_cache[2][40] ~= true,
     "Guard Brain should establish block before attempting a push")
-input_handler._frame = 201
+input_handler._frame = 301
 parse_network_input(41)
 assert(network_input_cache[3][41] == true and network_input_cache[2][41] == true,
     "Guard Brain should send the push attack only after block is established")
@@ -1850,6 +2184,7 @@ mod.on_setting_changed("enable_nameplates")
 hooks["HealthExtension.init"](nil, nil, lifecycle_unit)
 local lifecycle_marker = { remove = false }
 local lifecycle_aim_marker = { remove = false }
+lifecycle_threat_marker = { remove = false }
 mod.marker_refs[lifecycle_unit] = lifecycle_marker
 mod.aim_marker_ref = lifecycle_aim_marker
 mod.on_disabled()

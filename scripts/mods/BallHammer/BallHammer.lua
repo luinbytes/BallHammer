@@ -8,6 +8,13 @@ local AttackSettings = require("scripts/settings/damage/attack_settings")
 local Recoil = require("scripts/utilities/recoil")
 local WeaponTemplate = require("scripts/utilities/weapon/weapon_template")
 
+mod:register_hud_element({
+    class_name = "BallHammerThreatHud",
+    filename = "BallHammer/scripts/mods/BallHammer/BallHammerThreatHud",
+    use_hud_scale = true,
+    visibility_groups = { "alive" },
+})
+
 local function optional_require(path)
     local ok, module = pcall(require, path)
     return ok and module or nil
@@ -72,6 +79,18 @@ local COMPANION_RESCUE_TYPES = {
     consumed = true,
     grabbed = true,
 }
+local HIGH_RISK_MELEE = {
+    chaos_ogryn_executor = true,
+    cultist_berzerker = true,
+    renegade_berzerker = true,
+    renegade_executor = true,
+}
+local RAGER_MELEE = {
+    cultist_berzerker = true,
+    renegade_berzerker = true,
+}
+local CRUSHER_MELEE = { chaos_ogryn_executor = true }
+local MAULER_MELEE = { renegade_executor = true }
 
 -- State
 local unit_data_map       = {}
@@ -118,6 +137,13 @@ local enable_pickup_esp = true
 local max_distance      = 80
 local horde_distance    = 80
 local pickup_distance   = 80
+local pickup_filter     = "all"
+local PICKUP_FILTER_IDS = {
+    "plasteel", "diamantine", "ammo", "ammo_crate", "grenade", "medkit", "med_stimm",
+    "concentration_stimm", "combat_stimm", "celerity_stimm", "grimoire", "scripture", "other",
+}
+local pickup_custom = {}
+for i = 1, #PICKUP_FILTER_IDS do pickup_custom[PICKUP_FILTER_IDS[i]] = true end
 local outline_distance  = 30
 local aimbot_held       = false
 local aim_distance      = 80
@@ -203,6 +229,12 @@ end
 mod.get_aim_marker_style  = function()
     return show_aim_fov, aim_fov_opacity, aim_fov_red, aim_fov_green, aim_fov_blue
 end
+mod.get_threat_indicator = function()
+    if not enable_threat_markers or not active_threat then return nil end
+    local action = active_threat.action or active_threat.kind
+    local remaining = math.max(active_threat.impact_t - survival_t, 0)
+    return string.format("%s %.1f", string.upper(action), remaining)
+end
 mod.get_enable_nameplates = function() return enable_nameplates end
 mod.get_max_distance      = function() return max_distance end
 mod.get_enable_horde_esp  = function() return enable_horde_esp end
@@ -211,6 +243,10 @@ mod.get_aim_location      = function() return aim_location end
 mod.get_pickup_data       = function(unit) return pickup_unit_data[unit] end
 mod.get_enable_pickup_esp = function() return enable_pickup_esp end
 mod.get_pickup_distance   = function() return pickup_distance end
+mod.get_pickup_visible    = function(data)
+    return pickup_filter == "all" or data and (pickup_filter == "custom"
+        and pickup_custom[data.filter_id] == true or data.category == pickup_filter)
+end
 
 local function refresh_marker_aim_node()
     local node = aim_location == "torso" and "j_spine" or "j_head"
@@ -232,6 +268,11 @@ local function refresh_settings()
     max_distance      = mod:get("max_distance")
     horde_distance    = mod:get("horde_distance")
     pickup_distance   = mod:get("pickup_distance")
+    pickup_filter     = mod:get("pickup_filter") or "all"
+    for i = 1, #PICKUP_FILTER_IDS do
+        local id = PICKUP_FILTER_IDS[i]
+        pickup_custom[id] = mod:get("pickup_show_" .. id) ~= false
+    end
     outline_distance  = mod:get("outline_distance")
     aim_distance      = mod:get("aim_distance")
     aim_fov           = mod:get("aim_fov")
@@ -388,22 +429,22 @@ local function attach_live_world_markers()
 end
 
 local PICKUP_STYLES = {
-    small_metal = { name = "Plasteel", color = { 255, 70, 220, 255 } },
-    large_metal = { name = "Plasteel", color = { 255, 70, 220, 255 } },
-    small_platinum = { name = "Diamantine", color = { 255, 190, 100, 255 } },
-    large_platinum = { name = "Diamantine", color = { 255, 190, 100, 255 } },
-    small_clip = { name = "Ammo", color = { 255, 255, 210, 70 } },
-    large_clip = { name = "Ammo", color = { 255, 255, 210, 70 } },
-    large_ammunition_crate = { name = "Ammo Crate", color = { 255, 255, 180, 40 } },
-    small_grenade = { name = "Grenade", color = { 255, 255, 145, 55 } },
-    medical_crate_pocketable = { name = "Medkit", color = { 255, 80, 235, 120 } },
-    ammo_cache_pocketable = { name = "Ammo Crate", color = { 255, 255, 180, 40 } },
-    syringe_corruption_pocketable = { name = "Med Stimm", color = { 255, 70, 220, 80 } },
-    syringe_ability_boost_pocketable = { name = "Concentration Stimm", color = { 255, 240, 195, 50 } },
-    syringe_power_boost_pocketable = { name = "Combat Stimm", color = { 255, 240, 75, 55 } },
-    syringe_speed_boost_pocketable = { name = "Celerity Stimm", color = { 255, 40, 170, 255 } },
-    grimoire = { name = "Grimoire", color = { 255, 110, 255, 110 } },
-    tome = { name = "Scripture", color = { 255, 110, 210, 255 } },
+    small_metal = { name = "Plasteel", category = "materials", filter_id = "plasteel", color = { 255, 70, 220, 255 } },
+    large_metal = { name = "Plasteel", category = "materials", filter_id = "plasteel", color = { 255, 70, 220, 255 } },
+    small_platinum = { name = "Diamantine", category = "materials", filter_id = "diamantine", color = { 255, 190, 100, 255 } },
+    large_platinum = { name = "Diamantine", category = "materials", filter_id = "diamantine", color = { 255, 190, 100, 255 } },
+    small_clip = { name = "Ammo", category = "supplies", filter_id = "ammo", color = { 255, 255, 210, 70 } },
+    large_clip = { name = "Ammo", category = "supplies", filter_id = "ammo", color = { 255, 255, 210, 70 } },
+    large_ammunition_crate = { name = "Ammo Crate", category = "supplies", filter_id = "ammo_crate", color = { 255, 255, 180, 40 } },
+    small_grenade = { name = "Grenade", category = "supplies", filter_id = "grenade", color = { 255, 255, 145, 55 } },
+    medical_crate_pocketable = { name = "Medkit", category = "supplies", filter_id = "medkit", color = { 255, 80, 235, 120 } },
+    ammo_cache_pocketable = { name = "Ammo Crate", category = "supplies", filter_id = "ammo_crate", color = { 255, 255, 180, 40 } },
+    syringe_corruption_pocketable = { name = "Med Stimm", category = "stimms", filter_id = "med_stimm", color = { 255, 70, 220, 80 } },
+    syringe_ability_boost_pocketable = { name = "Concentration Stimm", category = "stimms", filter_id = "concentration_stimm", color = { 255, 240, 195, 50 } },
+    syringe_power_boost_pocketable = { name = "Combat Stimm", category = "stimms", filter_id = "combat_stimm", color = { 255, 240, 75, 55 } },
+    syringe_speed_boost_pocketable = { name = "Celerity Stimm", category = "stimms", filter_id = "celerity_stimm", color = { 255, 40, 170, 255 } },
+    grimoire = { name = "Grimoire", category = "mission", filter_id = "grimoire", color = { 255, 110, 255, 110 } },
+    tome = { name = "Scripture", category = "mission", filter_id = "scripture", color = { 255, 110, 210, 255 } },
 }
 
 local function pickup_style(pickup_name)
@@ -411,32 +452,46 @@ local function pickup_style(pickup_name)
     if style then
         return {
             name = style.name,
+            category = style.category,
+            filter_id = style.filter_id,
             color = { style.color[1], style.color[2], style.color[3], style.color[4] },
         }
     end
-    local name, color
+    local name, category, filter_id, color
     if pickup_name:find("syringe") then
-        name, color = "Stimm", { 255, 255, 100, 180 }
+        name, category, filter_id, color = "Stimm", "stimms", "other", { 255, 255, 100, 180 }
     elseif pickup_name:find("grenade") then
-        name, color = "Grenade", { 255, 255, 145, 55 }
+        name, category, filter_id, color = "Grenade", "supplies", "grenade", { 255, 255, 145, 55 }
     elseif pickup_name:find("ammo") or pickup_name:find("ammunition") then
-        name, color = "Ammo", { 255, 255, 210, 70 }
+        name, category, filter_id, color = "Ammo", "supplies", "ammo", { 255, 255, 210, 70 }
     elseif pickup_name:find("medical") or pickup_name:find("health") then
-        name, color = "Medical", { 255, 80, 235, 120 }
+        name, category, filter_id, color = "Medical", "supplies", "medkit", { 255, 80, 235, 120 }
     elseif pickup_name:find("grimoire") then
-        name, color = "Grimoire", { 255, 110, 255, 110 }
+        name, category, filter_id, color = "Grimoire", "mission", "grimoire", { 255, 110, 255, 110 }
     elseif pickup_name:find("tome") then
-        name, color = "Scripture", { 255, 110, 210, 255 }
+        name, category, filter_id, color = "Scripture", "mission", "scripture", { 255, 110, 210, 255 }
     else
-        name, color = breed_label(pickup_name:gsub("_pickup.*$", "")), { 255, 210, 220, 235 }
+        name, category, filter_id, color = breed_label(pickup_name:gsub("_pickup.*$", "")), "supplies", "other",
+            { 255, 210, 220, 235 }
     end
-    return { name = name, color = color }
+    return { name = name, category = category, filter_id = filter_id, color = color }
+end
+
+local function pickup_is_socketed(unit)
+    local extension_manager = Managers.state and Managers.state.extension
+    local socket_system = extension_manager and extension_manager:system("luggable_socket_system")
+    local socket_units = socket_system and socket_system:socket_units()
+    for i = 1, socket_units and #socket_units or 0 do
+        local socket = ScriptUnit.has_extension(socket_units[i], "luggable_socket_system")
+        if socket and socket:socketed_unit() == unit then return true end
+    end
+    return false
 end
 
 local function add_pickup_esp(unit)
     if pickup_unit_data[unit] then return end
     local pickup_name = Unit.get_data(unit, "pickup_type")
-    if not pickup_name then return end
+    if not pickup_name or pickup_is_socketed(unit) then return end
     pickup_unit_data[unit] = pickup_style(pickup_name)
     if mod.enabled and enable_pickup_esp then add_pickup_marker(unit) end
 end
@@ -655,6 +710,15 @@ mod.on_setting_changed = function(setting_id)
         return
     end
 
+    if setting_id == "pickup_filter" or setting_id and setting_id:find("^pickup_show_") then
+        pickup_filter = mod:get("pickup_filter") or "all"
+        for i = 1, #PICKUP_FILTER_IDS do
+            local id = PICKUP_FILTER_IDS[i]
+            pickup_custom[id] = mod:get("pickup_show_" .. id) ~= false
+        end
+        return
+    end
+
     if not mod.enabled then return end
 
     if setting_id == "enable_outlines" then
@@ -837,6 +901,9 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
     end
     for unit in pairs(pickup_unit_data) do
         if not ALIVE[unit] then
+            kill_pickup_marker(unit)
+            pickup_unit_data[unit] = nil
+        elseif pickup_is_socketed(unit) then
             kill_pickup_marker(unit)
             pickup_unit_data[unit] = nil
         elseif mod.enabled and enable_pickup_esp and not pickup_active_markers[unit] then
@@ -1450,6 +1517,37 @@ local function local_player_unit()
     return player and player.player_unit
 end
 
+local function replicated_field(unit, field)
+    local game_session_manager = Managers.state and Managers.state.game_session
+    local unit_spawner = Managers.state and Managers.state.unit_spawner
+    local game_session = game_session_manager and game_session_manager.game_session
+        and game_session_manager:game_session()
+    local id_ok, game_object_id
+    if unit_spawner then
+        id_ok, game_object_id = pcall(
+            unit_spawner.game_object_id, unit_spawner, unit
+        )
+    end
+    if not game_session or not game_object_id or not GameSession
+        or not id_ok then
+        return nil
+    end
+    local has_ok, has_field = pcall(
+        GameSession.has_game_object_field, game_session, game_object_id, field
+    )
+    if not has_ok or not has_field then return nil end
+    local read_ok, value = pcall(
+        GameSession.game_object_field, game_session, game_object_id, field
+    )
+    return read_ok and value or nil
+end
+
+local function replicated_target(unit)
+    local target_id = replicated_field(unit, "target_unit_id")
+    local unit_spawner = Managers.state and Managers.state.unit_spawner
+    return target_id and unit_spawner and unit_spawner:unit(target_id) or nil
+end
+
 local function threat_target(scratchpad, blackboard)
     local perception = scratchpad and scratchpad.perception_component
         or blackboard and blackboard.perception
@@ -1467,16 +1565,35 @@ local function clear_active_threat()
 end
 
 local function register_threat(
-    kind, source, target, category, commit_t, impact_t, danger_position, phase
+    kind, source, target, category, commit_t, impact_t, danger_position, phase,
+    exact_reaction_t
 )
     local player_unit = local_player_unit()
     if not source or target ~= player_unit then return end
     commit_t = commit_t or survival_t
     impact_t = math.max(impact_t or commit_t, commit_t)
-    if active_threat and commit_t > active_threat.impact_t + 0.5 then clear_active_threat() end
+    if active_threat and commit_t > active_threat.impact_t + 0.05 then clear_active_threat() end
     local previous_t = threat_seen_at[source]
     if previous_t and commit_t - previous_t < 0.2 then return end
     threat_seen_at[source] = commit_t
+    if exact_reaction_t and active_threat and active_threat.source == source
+        and active_threat.kind == kind and active_threat.reacted
+        and impact_t > active_threat.impact_t + 0.1 then
+        clear_active_threat()
+    end
+    if active_threat and active_threat.source == source and active_threat.kind == kind then
+        active_threat.impact_t = math.min(active_threat.impact_t, impact_t)
+        active_threat.phase = phase or active_threat.phase
+        if danger_position then
+            active_threat.danger_position = Vector3Box(native_vector(danger_position))
+        end
+        if not active_threat.reacted then
+            active_threat.reaction_t = exact_reaction_t or Survival.reaction_time(
+                kind, active_threat.commit_t, active_threat.impact_t, reaction_timing
+            ) or commit_t
+        end
+        return
+    end
     local candidate = {
         kind = kind,
         source = source,
@@ -1484,15 +1601,16 @@ local function register_threat(
         category = category,
         commit_t = commit_t,
         impact_t = impact_t,
-        danger_position = danger_position and native_vector(danger_position),
+        danger_position = danger_position and Vector3Box(native_vector(danger_position)),
         phase = phase or "committed",
     }
     local chosen = Survival.prefer_threat(active_threat, candidate)
     if chosen ~= active_threat then
         clear_active_threat()
         active_threat = candidate
-        local safe_end = math.max(commit_t, impact_t - 0.05)
-        active_threat.reaction_t = Survival.safe_timing(commit_t, safe_end, reaction_timing) or commit_t
+        active_threat.reaction_t = exact_reaction_t or Survival.reaction_time(
+            kind, commit_t, impact_t, reaction_timing
+        ) or commit_t
         set_threat_marker(active_threat, string.upper(kind))
         local source_position = native_vector(Unit.world_position(source, 1))
         local target_position = native_vector(Unit.world_position(target, 1))
@@ -1525,7 +1643,7 @@ end
 
 local function defensive_move_action(threat, first_person)
     local player_position = first_person.position
-    local danger_position = threat.danger_position
+    local danger_position = threat.danger_position and threat.danger_position:unbox()
         or threat.source and native_vector(Unit.world_position(threat.source, 1))
     if not danger_position then return "move_left" end
     local direction = danger_position - player_position
@@ -1633,9 +1751,10 @@ end
 local next_guard_push_t = 0
 local function update_survival(player_unit, first_person, t)
     survival_t = t
-    if active_threat and t > active_threat.impact_t + 0.5 then clear_active_threat() end
+    if active_threat and t > active_threat.impact_t + 0.05 then clear_active_threat() end
 
     for unit, data in pairs(unit_data_map) do
+        local network_target = replicated_target(unit)
         if (data.breed_name == "chaos_hound" or data.breed_name == "chaos_armored_hound")
             and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
             local blackboard = BLACKBOARDS and BLACKBOARDS[unit]
@@ -1645,6 +1764,48 @@ local function update_survival(player_unit, first_person, t)
                     or blackboard.perception and blackboard.perception.target_unit
                 register_threat("hound", unit, target, "disabling", t, t + 0.35, nil, "leap")
             end
+            local locomotion = ScriptUnit.has_extension(unit, "locomotion_system")
+            local position = native_vector(Unit.world_position(unit, 1))
+            local velocity = locomotion and locomotion.current_velocity
+                and native_vector(locomotion:current_velocity())
+            if network_target == player_unit and position and velocity then
+                local dx, dy = Vector3.to_elements(first_person.position - position)
+                local vx, vy = Vector3.to_elements(velocity)
+                local impact_t = Survival.charge_impact_time(dx, dy, vx, vy, 10.5, 1, 1.5)
+                if impact_t then
+                    register_threat(
+                        "hound", unit, player_unit, "disabling", t, t + impact_t,
+                        nil, "replicated_leap"
+                    )
+                end
+            end
+        end
+        if data.breed_name and data.breed_name:gsub("_mutator$", "") == "cultist_mutant"
+            and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
+            local locomotion = ScriptUnit.has_extension(unit, "locomotion_system")
+            local position = native_vector(Unit.world_position(unit, 1))
+            local velocity = locomotion and locomotion.current_velocity
+                and native_vector(locomotion:current_velocity())
+            if position and velocity then
+                local dx, dy = Vector3.to_elements(first_person.position - position)
+                local vx, vy = Vector3.to_elements(velocity)
+                local impact_t = Survival.charge_impact_time(dx, dy, vx, vy)
+                if impact_t then
+                    register_threat(
+                        "mutant", unit, player_unit, "disabling", t, t + impact_t,
+                        nil, "replicated_charge"
+                    )
+                end
+            end
+        end
+        if (data.breed_name == "cultist_flamer" or data.breed_name == "renegade_flamer")
+            and network_target == player_unit
+            and HEALTH_ALIVE and HEALTH_ALIVE[unit]
+            and replicated_field(unit, "state") == 3 then
+            register_threat(
+                "flamer", unit, player_unit, "lethal", t, t + 0.25,
+                replicated_field(unit, "aim_position"), "replicated_beam"
+            )
         end
     end
 
@@ -1653,22 +1814,24 @@ local function update_survival(player_unit, first_person, t)
         local remaining = math.max(active_threat.impact_t - t, 0)
         active_threat.time_left = remaining
         local reaction = Survival.reaction(active_threat, {
-            can_block = enable_guard_brain and enable_survival_debug and context.can_block,
-            can_switch = enable_guard_brain and enable_survival_debug and context.can_switch,
+            can_block = enable_guard_brain and context.can_block,
+            can_switch = enable_guard_brain and context.can_switch,
             switch_lead = 0.35,
         })
         active_threat.action = reaction
         set_threat_marker(active_threat, string.format(
             "%s %.1f", string.upper(reaction), remaining
         ))
-        local reaction_enabled = active_threat.kind == "overhead"
-            and enable_guard_brain and enable_survival_debug
-            or enable_threat_reactions and enable_survival_debug
+        local reaction_enabled = (active_threat.kind == "overhead"
+                or active_threat.kind == "rager")
+            and enable_guard_brain
+            or enable_threat_reactions
         if t >= active_threat.reaction_t and not active_threat.reacted and reaction_enabled then
             active_threat.reacted = true
             requested_defense = {
                 action = reaction,
                 move_action = defensive_move_action(active_threat, first_person),
+                force_t = active_threat.impact_t - 0.12,
                 until_t = active_threat.impact_t + 0.25,
                 source = active_threat.source,
             }
@@ -1680,7 +1843,7 @@ local function update_survival(player_unit, first_person, t)
         end
     end
 
-    if enable_guard_brain and enable_survival_debug and context.can_block
+    if enable_guard_brain and context.can_block
         and not requested_defense and t >= next_guard_push_t then
         local stamina = context.unit_data and context.unit_data:read_component("stamina")
         local distances, safe_retreat = nearby_enemy_geometry(first_person.position, 4)
@@ -1741,17 +1904,156 @@ mod:hook_safe("BtGrenadierThrowAction", "_throw_grenade", function(
 end)
 
 mod:hook_safe("BtMeleeAttackAction", "_start_attack_anim", function(
-    self, unit, breed, target_unit, t, spawn_component, scratchpad
+    self, unit, breed, target_unit, t, spawn_component, scratchpad, action_data
 )
     local tags = breed and breed.tags or {}
     if not tags.elite and not tags.monster then return end
     local event = tostring(scratchpad and scratchpad.attack_event or ""):lower()
-    local kind = event:find("overhead", 1, true) and "overhead" or "unknown"
+    local rager = breed and (breed.name == "cultist_berzerker"
+        or breed.name == "renegade_berzerker")
+    local overhead = event:find("overhead", 1, true)
+        or action_data and action_data.aoe_threat_timing ~= nil
+    local kind = rager and "rager"
+        or overhead and "overhead" or "unknown"
     local impact_t = scratchpad and (scratchpad.attack_timing or scratchpad.start_sweep_t) or t
+    local dodge_window = scratchpad and scratchpad.dodge_window
+    local exact_reaction_t = dodge_window and math.max(t + 0.02, dodge_window + 0.02)
     register_threat(
-        kind, unit, target_unit, kind == "overhead" and "lethal" or "other",
-        t, impact_t, nil, event ~= "" and event or "melee_attack"
+        kind, unit, target_unit, (kind == "overhead" or kind == "rager") and "lethal" or "other",
+        t, impact_t, nil, event ~= "" and event or "melee_attack", exact_reaction_t
     )
+end)
+
+local function nearest_network_attacker(position, breed_filter)
+    local player_unit = local_player_unit()
+    position = position and native_vector(position)
+    local best_unit, best_distance
+    for unit, data in pairs(unit_data_map) do
+        if breed_filter[data.breed_name] and replicated_target(unit) == player_unit
+            and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
+            local unit_position = native_vector(Unit.world_position(unit, 1))
+            local distance = position and unit_position
+                and Vector3.length(unit_position - position) or 0
+            if not best_distance or distance < best_distance then
+                best_unit, best_distance = unit, distance
+            end
+        end
+    end
+    return best_unit
+end
+
+local MELEE_SOUND_CUES = {
+    ["wwise/events/weapon/play_minion_swing_1h_sword_elite"] = {
+        breeds = RAGER_MELEE,
+        kind = "rager",
+        impact_lead = 0.22,
+    },
+    ["wwise/events/weapon/play_minion_swing_2h_sword_elite"] = {
+        breeds = RAGER_MELEE,
+        kind = "rager",
+        impact_lead = 0.25,
+    },
+    ["wwise/events/weapon/play_minion_swing_chainaxe"] = {
+        breeds = MAULER_MELEE,
+        kind = "overhead",
+        impact_lead = 0.3,
+    },
+    ["wwise/events/weapon/play_minion_swing_2h_blunt_large_cleave"] = {
+        breeds = CRUSHER_MELEE,
+        kind = "overhead",
+        impact_lead = 0.35,
+    },
+    ["wwise/events/weapon/play_minion_swing_2h_blunt_large_sweep"] = {
+        breeds = CRUSHER_MELEE,
+        kind = "overhead",
+        impact_lead = 0.3,
+    },
+}
+
+if WwiseWorld then
+    mod:hook_safe(WwiseWorld, "trigger_resource_event", function(
+        wwise_world, event_name
+    )
+        local cue = MELEE_SOUND_CUES[event_name]
+        if not cue then return end
+        local game_session = Managers.state and Managers.state.game_session
+        if game_session and game_session.is_server and game_session:is_server() then return end
+        local source = nearest_network_attacker(nil, cue.breeds)
+        if source then
+            register_threat(
+                cue.kind, source, local_player_unit(), "lethal", survival_t,
+                survival_t + cue.impact_lead, nil, "melee_audio_cue",
+                survival_t + 0.02
+            )
+        end
+    end)
+end
+
+mod:hook_safe("MinionFxExtension", "rpc_trigger_minion_inventory_wwise_event", function(
+    self, channel_id, go_id, event_id, inventory_slot_id, fx_source_name_id,
+    optional_target_unit_id
+)
+    local event_name = NetworkLookup and NetworkLookup.sound_events
+        and NetworkLookup.sound_events[event_id]
+    if event_name ~= "wwise/events/minions/play_weapon_netgunner" then return end
+    local unit_spawner = Managers.state and Managers.state.unit_spawner
+    local target = unit_spawner and unit_spawner:unit(optional_target_unit_id)
+    local source = self and self._unit
+    if not source or not target then return end
+    local source_position = native_vector(Unit.world_position(source, 1))
+    local target_position = native_vector(Unit.world_position(target, 1))
+    local distance = source_position and target_position
+        and Vector3.length(source_position - target_position) or 4
+    register_threat(
+        "trapper", source, target, "disabling", survival_t,
+        survival_t + math.max(0.12, distance / 20), nil, "replicated_net_shot"
+    )
+end)
+
+mod:hook_safe("FxSystem", "rpc_trigger_wwise_event", function(
+    self, channel_id, event_id, position
+)
+    local event_name = NetworkLookup and NetworkLookup.sound_events
+        and NetworkLookup.sound_events[event_id]
+    if event_name ~= "wwise/events/weapon/play_special_sniper_flash" then return end
+    local source = nearest_network_attacker(position, { renegade_sniper = true })
+    if source then
+        register_threat(
+            "sniper", source, local_player_unit(), "lethal", survival_t,
+            survival_t + 0.45, position, "replicated_scope_flash"
+        )
+    end
+end)
+
+mod:hook_safe("FxSystem", "rpc_start_template_effect", function(
+    self, channel_id, buffer_index, template_id, optional_unit_id
+)
+    local template_name = NetworkLookup and NetworkLookup.effect_templates
+        and NetworkLookup.effect_templates[template_id]
+    if template_name ~= "renegade_grenadier_grenade"
+        and template_name ~= "cultist_grenadier_grenade" then return end
+    local unit_spawner = Managers.state and Managers.state.unit_spawner
+    local source = unit_spawner and unit_spawner:unit(optional_unit_id)
+    local target = source and replicated_target(source)
+    register_threat(
+        "grenade", source, target, "lethal", survival_t, survival_t + 0.6,
+        nil, "replicated_throw_windup"
+    )
+end)
+
+mod:hook_safe("PlayerUnitFxExtension", "rpc_play_exclusive_player_sound", function(
+    self, channel_id, game_object_id, event_id, position
+)
+    local event_name = NetworkLookup and NetworkLookup.player_character_sounds
+        and NetworkLookup.player_character_sounds[event_id]
+    if event_name ~= "wwise/events/player/play_backstab_indicator_melee_elite" then return end
+    local source = nearest_network_attacker(position, HIGH_RISK_MELEE)
+    if source then
+        register_threat(
+            "overhead", source, local_player_unit(), "lethal", survival_t,
+            survival_t + 0.6, position, "replicated_elite_backstab"
+        )
+    end
 end)
 
 local semi_auto_pressed_action_t = setmetatable({}, { __mode = "k" })
@@ -1781,7 +2083,6 @@ end
 local function has_physical_survival_input(lookup, input_cache, index)
     local actions = {
         "dodge", "action_one_hold", "action_one_pressed", "action_two_hold",
-        "move_forward", "move_backward", "move_left", "move_right",
         "wield_1", "wield_2", "weapon_reload_hold", "weapon_extra_hold",
     }
     for i = 1, #actions do
@@ -1789,6 +2090,13 @@ local function has_physical_survival_input(lookup, input_cache, index)
         if value == true or type(value) == "number" and value ~= 0 then return true end
     end
     return false
+end
+
+local function physical_move_action(lookup, input_cache, index)
+    for _, action in ipairs({ "move_forward", "move_backward", "move_left", "move_right" }) do
+        local value = cached_input(lookup, input_cache, index, action)
+        if value == true or type(value) == "number" and value ~= 0 then return action end
+    end
 end
 
 local function apply_input_sequence(sequence, lookup, input_cache, index)
@@ -1802,18 +2110,23 @@ end
 
 local function apply_survival_input(player_unit, lookup, input_cache, index, t)
     local physical = has_physical_survival_input(lookup, input_cache, index)
+    local physical_move = physical_move_action(lookup, input_cache, index)
     if requested_defense then
         local request = requested_defense
+        local force_dodge = request.action == "dodge" and t and request.force_t
+            and t >= request.force_t
         if t and t > request.until_t then
             if request.action == "switch_block" and (not physical or emergency_override) then
                 set_cached_input(lookup, input_cache, index, "dodge", true)
                 set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
             end
             requested_defense = nil
-        elseif not physical or emergency_override then
+        elseif not physical or emergency_override or force_dodge then
             if request.action == "dodge" then
                 set_cached_input(lookup, input_cache, index, "dodge", true)
-                set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
+                if not physical_move then
+                    set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
+                end
                 requested_defense = nil
             elseif request.action == "block" then
                 set_cached_input(lookup, input_cache, index, "action_two_hold", true)

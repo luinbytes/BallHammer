@@ -1,5 +1,6 @@
+local live_data
 local mod = {
-    get_unit_data = function() return nil end,
+    get_unit_data = function() return live_data end,
     get_enable_nameplates = function() return true end,
     get_max_distance = function() return 100 end,
     marker_refs = {},
@@ -60,6 +61,7 @@ assert(widget.content.name == "Ritualist" and widget.content.flag == "SPECIAL",
 assert(widget.style.top.color[3] == 80 and widget.style.name.text_color[3] == 80,
     "priority markers should use their breed category color")
 assert(mod.marker_refs[unit] == marker, "marker should register its unit reference")
+live_data = { name = "Ritualist", flag = "SPECIAL", color = { 255, 255, 80, 80 } }
 
 local vector = {}
 vector.__index = vector
@@ -98,11 +100,11 @@ local parent = {
 }
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
 assert(widget.content.name == "Ritualist 90m", "distance should stay with the name above the box")
-marker.data.threat_text = "DODGE 0.2"
+live_data.threat_text = "DODGE 0.2"
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
 assert(widget.content.flag == "DODGE 0.2",
-    "threat markers should show the chosen reaction and impact countdown")
-marker.data.threat_text = nil
+    "threat markers should use live unit data instead of the creation snapshot")
+live_data.threat_text = nil
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, marker)
 assert(widget.content.flag == "SPECIAL", "category flag should return after a threat clears")
 assert(widget.style.top.size[1] == 46,

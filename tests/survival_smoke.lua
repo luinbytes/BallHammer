@@ -7,6 +7,12 @@ end
 eq(Survival.safe_timing(10, 11, 0), 10, "early timing should use the start of the safe window")
 eq(Survival.safe_timing(10, 11, 100), 11, "late timing should stay inside the safe window")
 eq(Survival.safe_timing(11, 10, 50), nil, "invalid timing windows should fail closed")
+eq(Survival.reaction_time("mutant", 10, 11.2, 0), 10.85,
+    "early timing must stay inside the mutant dodge window")
+eq(Survival.reaction_time("mutant", 10, 11.2, 100), 11.02,
+    "late timing must leave enough time for Darktide to accept the dodge")
+eq(Survival.reaction_time("overhead", 10, 11, 100), 10.82,
+    "late timing must leave enough time for Darktide to accept the dodge")
 
 local disabler = { category = "disabling", impact_t = 4 }
 local lethal = { category = "lethal", impact_t = 3 }
@@ -16,17 +22,32 @@ eq(Survival.prefer_threat(disabler, earlier_disabler), earlier_disabler,
     "earlier impact should win inside a category")
 
 eq(Survival.reaction({ kind = "trapper" }, {}), "dodge", "trapper nets should dodge")
-eq(Survival.reaction({ kind = "overhead", time_left = 0.8 }, { can_block = true }), "block",
-    "an equipped melee weapon should block a verified overhead")
+eq(Survival.reaction({ kind = "rager" }, { can_block = true }), "dodge",
+    "rager combos should be escaped instead of held-blocked")
+eq(Survival.reaction({ kind = "overhead", time_left = 0.8 }, { can_block = true }), "dodge",
+    "a verified overhead should dodge because its damage bypasses block")
 eq(Survival.reaction({ kind = "overhead", time_left = 0.8 }, {
     can_switch = true,
     switch_lead = 0.4,
-}), "switch_block", "a safe emergency switch should lead into block")
+}), "dodge", "an overhead should not waste its reaction window switching weapons")
 eq(Survival.reaction({ kind = "overhead", time_left = 0.2 }, {
     can_switch = true,
     switch_lead = 0.4,
 }), "dodge", "a late emergency switch should fall back to dodge")
 eq(Survival.reaction({ kind = "unknown" }, {}), "marker", "unknown attacks should stay marker-only")
+
+eq(Survival.charge_impact_time(-8, 0, -8, 0), 1,
+    "a multiplayer mutant charge aimed through the player should predict impact")
+eq(Survival.charge_impact_time(-8, 0, 8, 0), nil,
+    "a mutant moving away from the player should not trigger a dodge")
+eq(Survival.charge_impact_time(-8, 2, -8, 0), nil,
+    "a mutant charge that will miss the player should not trigger a dodge")
+eq(Survival.charge_impact_time(-6, 0, -6, 0), nil,
+    "normal mutant running speed should not be mistaken for a charge")
+eq(Survival.charge_impact_time(-10, 0, -12, 0, 10.5, 1, 1.5), 10 / 12,
+    "a targeted hound leap should use its higher replicated speed threshold")
+eq(Survival.charge_impact_time(-8, 0, -10, 0, 10.5, 1, 1.5), nil,
+    "normal hound running speed should not be mistaken for a leap")
 
 eq(Survival.should_push({ 2, 3, 4 }, 0.5, 0.25, false), true,
     "three nearby enemies with stamina and no retreat should push")

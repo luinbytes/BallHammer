@@ -1,5 +1,6 @@
 local UIWidget = require("scripts/managers/ui/ui_widget")
 local mod = get_mod("BallHammer")
+local Bounds = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerBounds")
 local template = {}
 
 template.name = "ballhammer_pickup_marker"
@@ -10,8 +11,8 @@ template.max_distance = 999
 template.screen_clamp = false
 local STACK_GAP = 3
 local STACK_SPEED = 14
-local MIN_STACK_DISTANCE = 4
 local COMPACT_CARD_WIDTH = 156
+local DETACH_GAP = 6
 local transition_states = {}
 
 local function rect_style(color, offset, size)
@@ -115,44 +116,43 @@ end
 
 local last_layout_t
 
-local function layout_markers(t)
-    if t ~= nil and last_layout_t == t then return end
-    last_layout_t = t
-    local markers, close_markers = {}, {}
-    local max_distance = mod.get_pickup_distance()
-    for unit, marker in pairs(mod.pickup_marker_refs) do
-        local widget = marker.widget
-        local distance = widget and widget.content.distance
-        if ALIVE[unit] and marker.draw and distance and distance <= max_distance then
-            local data = marker.data or mod.get_pickup_data(unit)
-            widget.content.name = data and data.name or "Pickup"
-            local item = {
-                marker = marker,
-                x = widget.offset[1],
-                y = widget.offset[2],
-                distance = distance,
-                name = data and data.name or "Pickup",
-            }
-            local collection = distance < MIN_STACK_DISTANCE and close_markers or markers
-            collection[#collection + 1] = item
+local function marker_projection(parent, ui_renderer, marker, widget)
+    widget = widget or marker.widget
+    if not widget then return false end
+    if parent and ui_renderer and parent._get_camera then
+        local camera = parent:_get_camera()
+        local position = Unit.world_position(marker.unit, template.unit_node)
+        if camera and position then
+            return Bounds.point_in_screen_buffer(parent, ui_renderer, camera, position)
         end
     end
+    local offset = widget.offset or { 0, 0 }
+    return marker.draw, offset[1], offset[2]
+end
 
-    for i = 1, #close_markers do
-        local item = close_markers[i]
-        apply_stack_density(item.marker, true)
-        local state = transition_states[item.marker.unit]
-        if not state then
-            state = { x = 0, y = 0, last_t = t }
-            transition_states[item.marker.unit] = state
+local function layout_markers(parent, ui_renderer, t)
+    if t ~= nil and last_layout_t == t then return end
+    last_layout_t = t
+    local markers = {}
+    local max_distance = mod.get_pickup_distance()
+    for unit, marker in pairs(mod.pickup_marker_refs) do
+        if ALIVE[unit] then
+            local widget = marker.widget
+            local distance = widget and widget.content.distance
+            local data = marker.data or mod.get_pickup_data(unit)
+            local in_buffer, x, y = marker_projection(parent, ui_renderer, marker)
+            if in_buffer and distance and distance <= max_distance
+                and data and mod.get_pickup_visible(data) then
+                widget.content.name = data.name
+                markers[#markers + 1] = {
+                    marker = marker,
+                    x = x,
+                    y = y,
+                    distance = distance,
+                    name = data.name,
+                }
+            end
         end
-        local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
-        state.last_t = t or state.last_t
-        local alpha = 1 - math.exp(-STACK_SPEED * dt)
-        state.x = state.x + (0 - state.x) * alpha
-        state.y = state.y + (0 - state.y) * alpha
-        item.marker.widget.offset[1] = item.x + state.x
-        item.marker.widget.offset[2] = item.y + state.y
     end
     table.sort(markers, function(a, b)
         if a.name ~= b.name then return a.name < b.name end
@@ -173,8 +173,8 @@ local function layout_markers(t)
                 for j = 1, #markers do
                     local candidate = markers[j]
                     if not assigned[j]
-                        and math.abs(source.x - candidate.x) < COMPACT_CARD_WIDTH
-                        and math.abs(source.y - candidate.y) < 24 then
+                        and math.abs(source.x - candidate.x) < COMPACT_CARD_WIDTH + DETACH_GAP
+                        and math.abs(source.y - candidate.y) < 24 + DETACH_GAP then
                         assigned[j] = true
                         cluster[#cluster + 1] = candidate
                         queue[#queue + 1] = j
@@ -238,13 +238,14 @@ template.on_exit = function(_, marker)
     transition_states[marker.unit] = nil
 end
 
-template.update_function = function(_, _, widget, marker, _, _, t)
+template.update_function = function(parent, ui_renderer, widget, marker, _, _, t)
     if not ALIVE[marker.unit] then
         marker.remove = true
         return
     end
     local distance = widget.content.distance
-    if not mod.enabled or not mod.get_enable_pickup_esp() or not marker.draw or not distance
+    local in_buffer = marker_projection(parent, ui_renderer, marker, widget)
+    if not mod.enabled or not mod.get_enable_pickup_esp() or not in_buffer or not distance
         or distance > mod.get_pickup_distance() then
         widget.visible = false
         return
@@ -255,7 +256,11 @@ template.update_function = function(_, _, widget, marker, _, _, t)
         marker.remove = true
         return
     end
-    layout_markers(t)
+    if not mod.get_pickup_visible(data) then
+        widget.visible = false
+        return
+    end
+    layout_markers(parent, ui_renderer, t)
     local max_distance = mod.get_pickup_distance()
     local fade_start = max_distance * 0.6
     local fade = distance <= fade_start and 1

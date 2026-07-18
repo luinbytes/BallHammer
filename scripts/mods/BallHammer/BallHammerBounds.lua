@@ -1,4 +1,5 @@
 local bounds = {}
+bounds.OFFSCREEN_BUFFER = 128
 
 local BONE_NODES = {
     "j_head", "j_jaw", "j_neck", "j_neck1", "j_spine", "j_spine1", "j_spine2", "j_hips",
@@ -58,6 +59,16 @@ end
 function bounds.in_screen_buffer(box, width, height, buffer)
     return box.right >= -buffer and box.left <= width + buffer and
         box.bottom >= -buffer and box.top <= height + buffer
+end
+
+function bounds.point_in_screen_buffer(parent, ui_renderer, camera, position)
+    local screen_x, screen_y = parent:_get_screen_offset(ui_renderer.scale)
+    local x, y = screen_point(parent, camera, position, screen_x, screen_y, ui_renderer.inverse_scale)
+    if not x then return false end
+    local width = RESOLUTION_LOOKUP.width * ui_renderer.inverse_scale
+    local height = RESOLUTION_LOOKUP.height * ui_renderer.inverse_scale
+    return bounds.in_screen_buffer({ left = x, right = x, top = y, bottom = y },
+        width, height, bounds.OFFSCREEN_BUFFER), x, y
 end
 
 return bounds

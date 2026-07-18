@@ -5,11 +5,17 @@ table.clone = table.clone or function(value)
 end
 
 local enabled = true
+local pickup_filter = "all"
 local unit = {}
 local world_positions = { [unit] = { 0, 0, 0 } }
-Unit = { world_position = function(value) return world_positions[value] end }
+Unit = {
+    world_position = function(value)
+        assert(ALIVE[value] ~= false, "invalid UnitReference")
+        return world_positions[value]
+    end,
+}
 Vector3 = { to_elements = function(value) return value[1], value[2], value[3] end }
-local data = { name = "Plasteel", color = { 255, 70, 220, 255 } }
+local data = { name = "Plasteel", category = "materials", color = { 255, 70, 220, 255 } }
 local mod = {
     enabled = true,
     pickup_marker_refs = {},
@@ -17,6 +23,13 @@ local mod = {
     get_pickup_data = function() return data end,
     get_enable_pickup_esp = function() return enabled end,
     get_pickup_distance = function() return 100 end,
+    get_pickup_visible = function(value)
+        return pickup_filter == "all" or value.category == pickup_filter
+    end,
+    io_dofile = function(_, path)
+        local file = path:match("([^/]+)$")
+        return dofile("scripts/mods/BallHammer/" .. file .. ".lua")
+    end,
 }
 get_mod = function() return mod end
 package.preload["scripts/managers/ui/ui_widget"] = function()
@@ -192,6 +205,32 @@ assert(math.abs(close_markers[1].widget.offset[1] - close_markers[2].widget.offs
     and close_markers[2].widget.style.name.size[1] >= #"Concentration Stimm" * 6,
     "nearby pickups should detach to text-sized cards on their own projected anchors")
 
+local close_overlap_markers = {}
+for i = 1, 2 do
+    local close_unit = {}
+    ALIVE[close_unit] = true
+    world_positions[close_unit] = { 8 + i * 0.2, 0, 0 }
+    local close_x = 2000 + (i - 1) * 150
+    local close_widget = pickup_widget(3, close_x, 100)
+    local close_marker = {
+        unit = close_unit,
+        data = { name = i == 1 and "Ammo" or "Grenade", color = { 255, 255, 255, 255 } },
+        draw = true,
+        widget = close_widget,
+    }
+    template.on_enter(close_widget, close_marker)
+    markers[#markers + 1] = close_marker
+    anchors[#anchors + 1] = { close_x, 100 }
+    close_overlap_markers[i] = close_marker
+end
+update_stack(11.5)
+update_stack(11.9)
+assert(math.abs(close_overlap_markers[1].widget.offset[1]
+        - close_overlap_markers[2].widget.offset[1]) < 1
+    and math.abs(close_overlap_markers[1].widget.offset[2]
+        - close_overlap_markers[2].widget.offset[2]) >= 24,
+    "nearby pickups should stay grouped until their anchors have a clean non-overlapping gap")
+
 local spread_units = { {}, {} }
 local spread_markers = {}
 for i = 1, 2 do
@@ -233,12 +272,48 @@ update_stack(13)
 assert(threshold_widget.style.background.size[1] <= 184
     and threshold_widget.style.background.size[2] == 24,
     "a standalone pickup at the 4m grouping threshold must keep the compact card")
+
+RESOLUTION_LOOKUP = { width = 1000, height = 600 }
+local buffered_unit = {}
+ALIVE[buffered_unit] = true
+world_positions[buffered_unit] = { 0, 0, 0, screen_x = -100, screen_y = 100 }
+local buffered_widget = pickup_widget(10, -100, 100)
+local buffered_marker = {
+    unit = buffered_unit,
+    data = { name = "Grenade", color = { 255, 255, 255, 255 } },
+    draw = false,
+    widget = buffered_widget,
+}
+local deleted_unit = {}
+ALIVE[deleted_unit] = false
+mod.pickup_marker_refs[deleted_unit] = {
+    unit = deleted_unit,
+    data = { name = "Deleted", category = "supplies", color = { 255, 255, 255, 255 } },
+    draw = true,
+    widget = pickup_widget(10, 0, 0),
+}
+local buffered_parent = {
+    _get_camera = function() return {} end,
+    _get_screen_offset = function() return 0, 0 end,
+    _convert_world_to_screen_position = function(_, _, position)
+        return position.screen_x, position.screen_y
+    end,
+}
+template.on_enter(buffered_widget, buffered_marker)
+template.update_function(buffered_parent, { scale = 1, inverse_scale = 1 },
+    buffered_widget, buffered_marker, nil, nil, 14)
+assert(buffered_widget.visible,
+    "pickups should remain drawn while their anchor is inside the shared offscreen buffer")
+world_positions[buffered_unit].screen_x = -180
+template.update_function(buffered_parent, { scale = 1, inverse_scale = 1 },
+    buffered_widget, buffered_marker, nil, nil, 14.1)
+assert(not buffered_widget.visible,
+    "pickups should stop drawing after their anchor leaves the shared offscreen buffer")
 for i = 1, #markers do
     for j = i + 1, #markers do
         local left, right = markers[i].widget, markers[j].widget
         local required_width = (left.style.background.size[1] + right.style.background.size[1]) * 0.5
         if left.visible and right.visible
-            and left.content.distance >= 4 and right.content.distance >= 4
             and math.abs(left.offset[1] - right.offset[1]) < required_width then
             local required_gap = (left.style.background.size[2] + right.style.background.size[2]) * 0.5
             assert(math.abs(left.offset[2] - right.offset[2]) >= required_gap,
@@ -248,6 +323,12 @@ for i = 1, #markers do
         end
     end
 end
+pickup_filter = "stimms"
+template.update_function(nil, nil, widget, marker, nil, nil, 15)
+assert(not widget.visible, "pickup filter changes should hide existing non-matching markers live")
+pickup_filter = "all"
+template.update_function(nil, nil, widget, marker, nil, nil, 15.1)
+assert(widget.visible, "pickup filter changes should restore matching existing markers live")
 enabled = false
 template.update_function(nil, nil, widget, marker)
 assert(not widget.visible, "pickup labels should respect their independent setting")

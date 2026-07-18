@@ -7,7 +7,6 @@ local template = {}
 local cached_time = nil
 local cached_boxes = {}
 local transition_states = {}
-local OFFSCREEN_BUFFER = 48
 local TRANSITION_DURATION = 0.28
 local TRANSITION_SPEED = 14
 
@@ -101,7 +100,7 @@ local function project_box(parent, ui_renderer, marker)
     local screen_width = RESOLUTION_LOOKUP.width * inverse_scale
     local screen_height = RESOLUTION_LOOKUP.height * inverse_scale
 
-    box.in_buffer = Bounds.in_screen_buffer(bounds, screen_width, screen_height, OFFSCREEN_BUFFER)
+    box.in_buffer = Bounds.in_screen_buffer(bounds, screen_width, screen_height, Bounds.OFFSCREEN_BUFFER)
     box.projected = box.in_buffer
     box.anchor_x = widget.offset[1]
     box.anchor_y = widget.offset[2]

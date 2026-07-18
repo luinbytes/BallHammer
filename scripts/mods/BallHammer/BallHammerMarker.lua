@@ -153,7 +153,7 @@ local function update_box(parent, ui_renderer, widget, marker, body, health_frac
 end
 
 template.on_enter = function(widget, marker)
-    local data = marker.data or mod.get_unit_data(marker.unit)
+    local data = mod.get_unit_data(marker.unit) or marker.data
     if data then
         widget.content.name = name_for(data)
         widget.content.flag = flag_for(data)
@@ -193,7 +193,7 @@ template.update_function = function(parent, ui_renderer, widget, marker)
         widget.visible = false
         return
     end
-    local data = marker.data or mod.get_unit_data(marker.unit)
+    local data = mod.get_unit_data(marker.unit) or marker.data
     if data then
         apply_distance_alpha(widget, data, distance,
             marker.raycast_initialized and marker.raycast_result == false)

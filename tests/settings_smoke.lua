@@ -29,6 +29,23 @@ assert(widgets[2].sub_widgets[1].setting_id == "enable_pickup_esp"
     "pickup ESP should be enabled independently by default")
 assert(widgets[2].sub_widgets[2].setting_id == "pickup_distance",
     "pickup ESP should expose a distance limit")
+local pickup_filter = widgets[2].sub_widgets[3]
+assert(pickup_filter.setting_id == "pickup_filter" and pickup_filter.type == "dropdown"
+    and pickup_filter.default_value == "all" and #pickup_filter.options == 6,
+    "pickup ESP should expose a compact category filter")
+assert(pickup_filter.options[1].value == "all"
+    and pickup_filter.options[2].value == "supplies"
+    and pickup_filter.options[3].value == "stimms"
+    and pickup_filter.options[4].value == "materials"
+    and pickup_filter.options[5].value == "mission"
+    and pickup_filter.options[6].value == "custom"
+    and #pickup_filter.sub_widgets == 13,
+    "pickup filter should cover all classified pickup categories")
+assert(pickup_filter.sub_widgets[1].setting_id == "pickup_show_plasteel"
+    and pickup_filter.sub_widgets[2].setting_id == "pickup_show_diamantine"
+    and pickup_filter.sub_widgets[7].setting_id == "pickup_show_med_stimm"
+    and pickup_filter.sub_widgets[13].setting_id == "pickup_show_other",
+    "custom pickup filtering should expose individual pickup types")
 
 local activation = widgets[3].sub_widgets[1]
 assert(activation.setting_id == "aim_activation" and activation.default_value == "left_mouse",
