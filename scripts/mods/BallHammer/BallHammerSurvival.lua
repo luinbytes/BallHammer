@@ -58,8 +58,7 @@ function Survival.prefer_threat(current, candidate)
     return (candidate.impact_t or math.huge) < (current.impact_t or math.huge) and candidate or current
 end
 
-function Survival.reaction(threat, context)
-    context = context or {}
+function Survival.reaction(threat)
     if DODGE_THREATS[threat and threat.kind] then return "dodge" end
     return "marker"
 end

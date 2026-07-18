@@ -130,7 +130,6 @@ local settings = {
     emergency_override = false,
     enable_survival_debug = false,
     enable_guard_brain = false,
-    enable_emergency_switch = false,
     stamina_reserve = 25,
     enable_resource_governor = false,
     enable_auto_vent = false,
@@ -1799,39 +1798,11 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 )
 input_handler._frame = 93
 parse_network_input(33)
-assert(network_input_cache[6][33] == true,
+assert(network_input_cache[6][33] == true and network_input_cache[9][33] ~= true,
     "a verified overhead should dodge instead of trying to block bypass damage")
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 10.2, 102
 )
-
-local switch_crusher = {}
-units[switch_crusher] = {
-    breed_data = units[crusher].breed_data,
-    position = Vector3(0, 3, 0),
-}
-HEALTH_ALIVE[switch_crusher] = true
-hooks["HealthExtension.init"](nil, nil, switch_crusher)
-settings.enable_emergency_switch = true
-mod.on_setting_changed("enable_emergency_switch")
-wielded_slot = "slot_secondary"
-hooks["BtMeleeAttackAction._start_attack_anim"](
-    {}, switch_crusher, units[switch_crusher].breed_data, player_unit, 10.3, {}, {
-        attack_event = "attack_overhead",
-        attack_timing = 11.3,
-    }
-)
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](
-    first_person_extension, player_unit, 0.1, 10.8, 108
-)
-input_handler._frame = 108
-parse_network_input(34)
-assert(network_input_cache[6][34] == true and network_input_cache[9][34] ~= true,
-    "an overhead should dodge without wasting time switching to melee")
-input_handler._frame = 109
-parse_network_input(35)
-assert(network_input_cache[3][35] ~= true and network_input_cache[9][35] ~= true,
-    "an overhead reaction must never fall back to block or weapon switching")
 
 multiplayer_mutant = {}
 units[multiplayer_mutant] = {

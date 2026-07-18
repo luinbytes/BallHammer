@@ -187,7 +187,6 @@ local reaction_timing = 50
 local emergency_override = false
 local enable_survival_debug = false
 local enable_guard_brain = false
-local enable_emergency_switch = false
 local stamina_reserve = 0.25
 local enable_resource_governor = false
 local enable_auto_vent = false
@@ -304,7 +303,6 @@ local function refresh_settings()
     emergency_override = mod:get("emergency_override")
     enable_survival_debug = mod:get("enable_survival_debug")
     enable_guard_brain = mod:get("enable_guard_brain")
-    enable_emergency_switch = mod:get("enable_emergency_switch")
     stamina_reserve = mod:get("stamina_reserve") / 100
     enable_resource_governor = mod:get("enable_resource_governor")
     enable_auto_vent = mod:get("enable_auto_vent")
@@ -632,8 +630,8 @@ mod.on_setting_changed = function(setting_id)
     if setting_id == "enable_aim_director" or setting_id == "enable_threat_markers"
         or setting_id == "enable_threat_reactions" or setting_id == "reaction_timing"
         or setting_id == "emergency_override" or setting_id == "enable_survival_debug"
-        or setting_id == "enable_guard_brain" or setting_id == "enable_emergency_switch"
-        or setting_id == "stamina_reserve" or setting_id == "enable_resource_governor"
+        or setting_id == "enable_guard_brain" or setting_id == "stamina_reserve"
+        or setting_id == "enable_resource_governor"
         or setting_id == "enable_auto_vent" or setting_id == "peril_target"
         or setting_id == "heat_target" then
         refresh_settings()
@@ -1637,7 +1635,6 @@ local function current_weapon_context(player_unit)
         template = template,
         action_inputs = action_inputs,
         can_block = inventory and inventory.wielded_slot == "slot_primary" and action_inputs.block ~= nil,
-        can_switch = enable_emergency_switch and inventory and inventory.wielded_slot ~= "slot_primary",
     }
 end
 
@@ -1813,11 +1810,7 @@ local function update_survival(player_unit, first_person, t)
     if active_threat then
         local remaining = math.max(active_threat.impact_t - t, 0)
         active_threat.time_left = remaining
-        local reaction = Survival.reaction(active_threat, {
-            can_block = enable_guard_brain and context.can_block,
-            can_switch = enable_guard_brain and context.can_switch,
-            switch_lead = 0.35,
-        })
+        local reaction = Survival.reaction(active_threat)
         active_threat.action = reaction
         set_threat_marker(active_threat, string.format(
             "%s %.1f", string.upper(reaction), remaining
@@ -2108,7 +2101,7 @@ local function apply_input_sequence(sequence, lookup, input_cache, index)
     end
 end
 
-local function apply_survival_input(player_unit, lookup, input_cache, index, t)
+local function apply_survival_input(lookup, input_cache, index, t)
     local physical = has_physical_survival_input(lookup, input_cache, index)
     local physical_move = physical_move_action(lookup, input_cache, index)
     if requested_defense then
@@ -2116,10 +2109,6 @@ local function apply_survival_input(player_unit, lookup, input_cache, index, t)
         local force_dodge = request.action == "dodge" and t and request.force_t
             and t >= request.force_t
         if t and t > request.until_t then
-            if request.action == "switch_block" and (not physical or emergency_override) then
-                set_cached_input(lookup, input_cache, index, "dodge", true)
-                set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
-            end
             requested_defense = nil
         elseif not physical or emergency_override or force_dodge then
             if request.action == "dodge" then
@@ -2128,8 +2117,6 @@ local function apply_survival_input(player_unit, lookup, input_cache, index, t)
                     set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
                 end
                 requested_defense = nil
-            elseif request.action == "block" then
-                set_cached_input(lookup, input_cache, index, "action_two_hold", true)
             elseif request.action == "push" then
                 set_cached_input(lookup, input_cache, index, "action_two_hold", true)
                 request.action = "push_attack"
@@ -2138,18 +2125,6 @@ local function apply_survival_input(player_unit, lookup, input_cache, index, t)
                 set_cached_input(lookup, input_cache, index, "action_two_hold", true)
                 set_cached_input(lookup, input_cache, index, "action_one_pressed", true)
                 requested_defense = nil
-            elseif request.action == "switch_block" then
-                local context = current_weapon_context(player_unit)
-                if context.can_block then
-                    set_cached_input(lookup, input_cache, index, "action_two_hold", true)
-                    request.action = "block"
-                elseif context.inventory and context.inventory.wielded_slot == "slot_primary" then
-                    set_cached_input(lookup, input_cache, index, "dodge", true)
-                    set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
-                    requested_defense = nil
-                else
-                    set_cached_input(lookup, input_cache, index, "wield_1", true)
-                end
             end
         end
     end
@@ -2211,7 +2186,7 @@ mod:hook("HumanInputHandler", "_parse_input", function(
         end
     end
 
-    apply_survival_input(player_unit, lookup, input_cache, index, t)
+    apply_survival_input(lookup, input_cache, index, t)
 
     local generated_fire = requested_auto_fire_mode and t and requested_auto_fire_until
         and t <= requested_auto_fire_until

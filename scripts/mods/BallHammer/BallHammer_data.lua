@@ -334,11 +334,6 @@ return {
                         default_value = false,
                     },
                     {
-                        setting_id = "enable_emergency_switch",
-                        type = "checkbox",
-                        default_value = false,
-                    },
-                    {
                         setting_id = "stamina_reserve",
                         type = "numeric",
                         default_value = 25,

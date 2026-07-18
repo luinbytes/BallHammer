@@ -21,20 +21,12 @@ eq(Survival.prefer_threat(lethal, disabler), disabler, "disablers should outrank
 eq(Survival.prefer_threat(disabler, earlier_disabler), earlier_disabler,
     "earlier impact should win inside a category")
 
-eq(Survival.reaction({ kind = "trapper" }, {}), "dodge", "trapper nets should dodge")
-eq(Survival.reaction({ kind = "rager" }, { can_block = true }), "dodge",
+eq(Survival.reaction({ kind = "trapper" }), "dodge", "trapper nets should dodge")
+eq(Survival.reaction({ kind = "rager" }), "dodge",
     "rager combos should be escaped instead of held-blocked")
-eq(Survival.reaction({ kind = "overhead", time_left = 0.8 }, { can_block = true }), "dodge",
+eq(Survival.reaction({ kind = "overhead", time_left = 0.8 }), "dodge",
     "a verified overhead should dodge because its damage bypasses block")
-eq(Survival.reaction({ kind = "overhead", time_left = 0.8 }, {
-    can_switch = true,
-    switch_lead = 0.4,
-}), "dodge", "an overhead should not waste its reaction window switching weapons")
-eq(Survival.reaction({ kind = "overhead", time_left = 0.2 }, {
-    can_switch = true,
-    switch_lead = 0.4,
-}), "dodge", "a late emergency switch should fall back to dodge")
-eq(Survival.reaction({ kind = "unknown" }, {}), "marker", "unknown attacks should stay marker-only")
+eq(Survival.reaction({ kind = "unknown" }), "marker", "unknown attacks should stay marker-only")
 
 eq(Survival.charge_impact_time(-8, 0, -8, 0), 1,
     "a multiplayer mutant charge aimed through the player should predict impact")

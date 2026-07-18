@@ -11,7 +11,8 @@ template.max_distance = 999
 template.screen_clamp = false
 local STACK_GAP = 3
 local STACK_SPEED = 14
-local COMPACT_CARD_WIDTH = 156
+local CARD_WIDTH = 156
+local CARD_HEIGHT = 24
 local DETACH_GAP = 6
 local transition_states = {}
 
@@ -39,33 +40,21 @@ local function text_style(font_size, alignment, color, offset, size)
     }
 end
 
-local function apply_stack_density(marker, compact)
+local function apply_card_size(marker)
     local style = marker.widget.style
-    local width = compact and COMPACT_CARD_WIDTH or 216
-    marker.stack_dense = compact
-    style.shadow.size[1] = compact and width + 4 or width
-    style.shadow.size[2] = compact and 28 or 28
-    style.shadow.offset[2] = compact and -1 or -2
-    style.background.size[1] = width
-    style.background.size[2] = compact and 24 or 28
-    style.glow.size[1] = width
-    style.glow.offset[2] = compact and 11 or 13
-    style.accent.offset[1] = -width * 0.5 + 2
-    style.accent.size[2] = compact and 22 or 24
-    local text_height = compact and 22 or 20
-    local name_width = compact and width - 40 or 164
-    style.name.font_size = compact and 10 or 11
-    style.name.size[1] = name_width
-    style.name.size[2] = text_height
-    style.name.offset[1] = compact and -14 or -18
-    style.name_shadow.font_size = compact and 10 or 11
-    style.name_shadow.size[1] = name_width
-    style.name_shadow.size[2] = text_height
-    style.name_shadow.offset[1] = compact and -13 or -17
-    style.distance.font_size = compact and 10 or 11
-    style.distance.size[1] = compact and 26 or 34
-    style.distance.size[2] = text_height
-    style.distance.offset[1] = compact and width * 0.5 - 17 or 88
+    style.shadow.size[1], style.shadow.size[2] = CARD_WIDTH + 4, 28
+    style.shadow.offset[2] = -1
+    style.background.size[1], style.background.size[2] = CARD_WIDTH, CARD_HEIGHT
+    style.glow.size[1], style.glow.offset[2] = CARD_WIDTH, 11
+    style.accent.offset[1], style.accent.size[2] = -CARD_WIDTH * 0.5 + 2, 22
+    style.name.font_size, style.name.size[1], style.name.size[2] = 10, CARD_WIDTH - 40, 22
+    style.name.offset[1] = -14
+    style.name_shadow.font_size = 10
+    style.name_shadow.size[1], style.name_shadow.size[2] = CARD_WIDTH - 40, 22
+    style.name_shadow.offset[1] = -13
+    style.distance.font_size = 10
+    style.distance.size[1], style.distance.size[2] = 26, 22
+    style.distance.offset[1] = CARD_WIDTH * 0.5 - 17
 end
 
 template.create_widget_defintion = function(_, scenegraph_id)
@@ -173,8 +162,8 @@ local function layout_markers(parent, ui_renderer, t)
                 for j = 1, #markers do
                     local candidate = markers[j]
                     if not assigned[j]
-                        and math.abs(source.x - candidate.x) < COMPACT_CARD_WIDTH + DETACH_GAP
-                        and math.abs(source.y - candidate.y) < 24 + DETACH_GAP then
+                        and math.abs(source.x - candidate.x) < CARD_WIDTH + DETACH_GAP
+                        and math.abs(source.y - candidate.y) < CARD_HEIGHT + DETACH_GAP then
                         assigned[j] = true
                         cluster[#cluster + 1] = candidate
                         queue[#queue + 1] = j
@@ -193,12 +182,11 @@ local function layout_markers(parent, ui_renderer, t)
                 anchor_y = anchor_y + cluster[j].y
             end
             anchor_x, anchor_y = anchor_x / #cluster, anchor_y / #cluster
-            local compact = true
-            local row_step = compact and 24 + STACK_GAP or template.size[2] + STACK_GAP
+            local row_step = CARD_HEIGHT + STACK_GAP
             local first_y = anchor_y + (#cluster - 1) * row_step * 0.5
             for j = 1, #cluster do
                 local item = cluster[j]
-                apply_stack_density(item.marker, compact)
+                apply_card_size(item.marker)
                 local target_x = #cluster > 1 and anchor_x or item.x
                 local target_y = #cluster > 1
                     and first_y - (j - 1) * row_step or item.y
@@ -274,12 +262,12 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         alpha, data.color[2], data.color[3], data.color[4]
     local glow_color = widget.style.glow.color
     glow_color[1], glow_color[2], glow_color[3], glow_color[4] =
-        math.floor((marker.stack_dense and 45 or 70) * fade + 0.5),
+        math.floor(45 * fade + 0.5),
         data.color[2], data.color[3], data.color[4]
-    widget.style.name_shadow.text_color[1] = math.floor((marker.stack_dense and 140 or 180) * fade + 0.5)
+    widget.style.name_shadow.text_color[1] = math.floor(140 * fade + 0.5)
     widget.style.distance.text_color[1] = math.floor(255 * fade + 0.5)
-    widget.style.background.color[1] = math.floor((marker.stack_dense and 125 or 205) * fade + 0.5)
-    widget.style.shadow.color[1] = math.floor((marker.stack_dense and 55 or 120) * fade + 0.5)
+    widget.style.background.color[1] = math.floor(125 * fade + 0.5)
+    widget.style.shadow.color[1] = math.floor(55 * fade + 0.5)
     local floor_distance = math.floor(distance)
     if floor_distance ~= marker.last_dist then
         marker.last_dist = floor_distance

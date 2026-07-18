@@ -80,7 +80,6 @@ return {
 
     guard_settings = { en = "Guard Brain" },
     enable_guard_brain = { en = "Automatic Block and Push (Diagnostic)" },
-    enable_emergency_switch = { en = "Emergency Switch to Melee" },
     stamina_reserve = { en = "Push Stamina Reserve (%%)" },
 
     governor_settings = { en = "Warp and Heat Governor" },

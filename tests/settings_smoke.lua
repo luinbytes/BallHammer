@@ -92,12 +92,9 @@ assert(widgets[7].sub_widgets[4].setting_id == "emergency_override"
 assert(widgets[8].sub_widgets[1].setting_id == "enable_guard_brain"
     and widgets[8].sub_widgets[1].default_value == false,
     "Guard Brain should be opt-in")
-assert(widgets[8].sub_widgets[2].setting_id == "enable_emergency_switch"
-    and widgets[8].sub_widgets[2].default_value == false,
-    "emergency melee switching should be opt-in")
-assert(widgets[8].sub_widgets[3].setting_id == "stamina_reserve"
-    and widgets[8].sub_widgets[3].range[1] == 20
-    and widgets[8].sub_widgets[3].range[2] == 60,
+assert(widgets[8].sub_widgets[2].setting_id == "stamina_reserve"
+    and widgets[8].sub_widgets[2].range[1] == 20
+    and widgets[8].sub_widgets[2].range[2] == 60,
     "push reserve must stay inside its safe range")
 assert(widgets[9].sub_widgets[1].setting_id == "enable_resource_governor"
     and widgets[9].sub_widgets[1].default_value == false,
