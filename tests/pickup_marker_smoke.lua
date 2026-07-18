@@ -6,6 +6,9 @@ end
 
 local enabled = true
 local unit = {}
+local world_positions = { [unit] = { 0, 0, 0 } }
+Unit = { world_position = function(value) return world_positions[value] end }
+Vector3 = { to_elements = function(value) return value[1], value[2], value[3] end }
 local data = { name = "Plasteel", color = { 255, 70, 220, 255 } }
 local mod = {
     enabled = true,
@@ -60,6 +63,8 @@ local nearby_unit = {}
 local third_unit = {}
 ALIVE[nearby_unit] = true
 ALIVE[third_unit] = true
+world_positions[nearby_unit] = { 0.2, 0, 0 }
+world_positions[third_unit] = { 0.4, 0, 0 }
 local function pickup_widget(distance, x, y)
     local passes = template.create_widget_defintion(template, "pivot")
     local widget_styles = {}
@@ -96,13 +101,14 @@ assert(math.abs(widget.offset[1] - nearby_widget.offset[1]) < 1
     "overlapping pickup cards should align into one list")
 assert(nearby_widget.offset[2] > third_widget.offset[2]
     and third_widget.offset[2] > widget.offset[2]
-    and nearby_widget.offset[2] - third_widget.offset[2] >= template.size[2]
-    and third_widget.offset[2] - widget.offset[2] >= template.size[2],
+    and nearby_widget.offset[2] - third_widget.offset[2] >= 24
+    and third_widget.offset[2] - widget.offset[2] >= 24,
     "pickup stacks should be alphabetically sorted without card overlap")
-local extra_names = { "Celerity Stimm", "Combat Stimm", "Grenade", "Medkit" }
+local extra_names = { "Celerity Stimm", "Combat Stimm", "Concentration Stimm", "Grenade" }
 for i = 1, #extra_names do
     local extra_unit = {}
     ALIVE[extra_unit] = true
+    world_positions[extra_unit] = { i * 0.08, 0.1, 0 }
     local extra_widget = pickup_widget(82 + i, 96 + i * 3, 98 + i)
     local extra_marker = {
         unit = extra_unit,
@@ -117,12 +123,26 @@ end
 update_stack(1.5)
 update_stack(1.8)
 local visible_count, overflow_label = 0, false
+local uniform_width
 for i = 1, #markers do
     if markers[i].widget.visible then visible_count = visible_count + 1 end
-    if markers[i].widget.content.name:find("+2", 1, true) then overflow_label = true end
+    if markers[i].widget.content.name:find("+", 1, true) then overflow_label = true end
+    assert(markers[i].widget.style.background.size[1] <= 184
+        and markers[i].widget.style.background.size[2] == 24,
+        "grouped pickups should use the smaller card with room for wrapped text")
+    assert(markers[i].widget.style.shadow.size[1] > markers[i].widget.style.background.size[1]
+        and markers[i].widget.style.background.color[1] < 150,
+        "compact pickup cards should use a soft translucent background")
+    uniform_width = uniform_width or markers[i].widget.style.background.size[1]
+    assert(markers[i].widget.style.background.size[1] == uniform_width,
+        "compact pickup cards should be uniformly wide")
 end
-assert(visible_count == 5 and overflow_label,
-    "large pickup stacks should cap at five rows and show the folded pickup count")
+assert(visible_count == #markers and not overflow_label,
+    "dense pickup stacks should preserve every pickup label")
+for i = 2, #markers do
+    assert(math.abs(markers[i].widget.offset[1] - markers[1].widget.offset[1]) < 1,
+        "grouped pickups should form one vertical list")
+end
 update_stack(10)
 local before_camera_move = {}
 for i = 1, #markers do
@@ -139,6 +159,94 @@ for i, before in pairs(before_camera_move) do
     assert(math.abs(markers[i].widget.offset[1] - before[1] - 180) < 0.001
         and math.abs(markers[i].widget.offset[2] - before[2] - 70) < 0.001,
         "camera projection changes should move pickup stacks immediately without smoothing")
+end
+
+local close_units = { {}, {} }
+local close_markers = {}
+for i = 1, 2 do
+    local close_unit = close_units[i]
+    ALIVE[close_unit] = true
+    world_positions[close_unit] = { 5 + i * 0.2, 0, 0 }
+    local close_x = 1000 + (i - 1) * 170
+    local close_widget = pickup_widget(1, close_x, 100)
+    local close_marker = {
+        unit = close_unit,
+        data = {
+            name = i == 1 and "Med Stimm" or "Concentration Stimm",
+            color = { 255, 255, 255, 255 },
+        },
+        draw = true,
+        widget = close_widget,
+    }
+    template.on_enter(close_widget, close_marker)
+    markers[#markers + 1] = close_marker
+    anchors[#anchors + 1] = { close_x, 100 }
+    close_markers[i] = close_marker
+end
+update_stack(11)
+update_stack(11.3)
+assert(math.abs(close_markers[1].widget.offset[1] - close_markers[2].widget.offset[1]) == 170
+    and math.abs(close_markers[1].widget.offset[2] - close_markers[2].widget.offset[2]) < 1
+    and close_markers[2].widget.style.background.size[2] == 24
+    and close_markers[1].widget.style.background.size[1] == close_markers[2].widget.style.background.size[1]
+    and close_markers[2].widget.style.name.size[1] >= #"Concentration Stimm" * 6,
+    "nearby pickups should detach to text-sized cards on their own projected anchors")
+
+local spread_units = { {}, {} }
+local spread_markers = {}
+for i = 1, 2 do
+    local spread_unit = spread_units[i]
+    ALIVE[spread_unit] = true
+    world_positions[spread_unit] = { 10 + (i - 1) * 1.2, 0, 0 }
+    local spread_widget = pickup_widget(20, 1200 + i * 10, 100)
+    local spread_marker = {
+        unit = spread_unit,
+        data = { name = "Spread " .. i, color = { 255, 255, 255, 255 } },
+        draw = true,
+        widget = spread_widget,
+    }
+    template.on_enter(spread_widget, spread_marker)
+    markers[#markers + 1] = spread_marker
+    anchors[#anchors + 1] = { 1200 + i * 10, 100 }
+    spread_markers[i] = spread_marker
+end
+update_stack(12)
+update_stack(12.3)
+assert(math.abs(spread_markers[1].widget.offset[1] - spread_markers[2].widget.offset[1]) < 1
+    and math.abs(spread_markers[1].widget.offset[2] - spread_markers[2].widget.offset[2]) >= 24,
+    "spread-out pickup collisions should use the same compact vertical list")
+
+local threshold_unit = {}
+ALIVE[threshold_unit] = true
+world_positions[threshold_unit] = { 20, 0, 0 }
+local threshold_widget = pickup_widget(4, 1600, 100)
+local threshold_marker = {
+    unit = threshold_unit,
+    data = { name = "Ammo", color = { 255, 255, 255, 255 } },
+    draw = true,
+    widget = threshold_widget,
+}
+template.on_enter(threshold_widget, threshold_marker)
+markers[#markers + 1] = threshold_marker
+anchors[#anchors + 1] = { 1600, 100 }
+update_stack(13)
+assert(threshold_widget.style.background.size[1] <= 184
+    and threshold_widget.style.background.size[2] == 24,
+    "a standalone pickup at the 4m grouping threshold must keep the compact card")
+for i = 1, #markers do
+    for j = i + 1, #markers do
+        local left, right = markers[i].widget, markers[j].widget
+        local required_width = (left.style.background.size[1] + right.style.background.size[1]) * 0.5
+        if left.visible and right.visible
+            and left.content.distance >= 4 and right.content.distance >= 4
+            and math.abs(left.offset[1] - right.offset[1]) < required_width then
+            local required_gap = (left.style.background.size[2] + right.style.background.size[2]) * 0.5
+            assert(math.abs(left.offset[2] - right.offset[2]) >= required_gap,
+                string.format("pickup collision layout should leave no visible card overlap: %s/%s at %.1f,%.1f / %.1f,%.1f",
+                    left.content.name, right.content.name,
+                    left.offset[1], left.offset[2], right.offset[1], right.offset[2]))
+        end
+    end
 end
 enabled = false
 template.update_function(nil, nil, widget, marker)

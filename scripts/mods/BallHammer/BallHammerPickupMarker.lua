@@ -10,7 +10,8 @@ template.max_distance = 999
 template.screen_clamp = false
 local STACK_GAP = 3
 local STACK_SPEED = 14
-local MAX_STACK_ROWS = 5
+local MIN_STACK_DISTANCE = 4
+local COMPACT_CARD_WIDTH = 156
 local transition_states = {}
 
 local function rect_style(color, offset, size)
@@ -35,6 +36,35 @@ local function text_style(font_size, alignment, color, offset, size)
         offset = offset,
         size = size,
     }
+end
+
+local function apply_stack_density(marker, compact)
+    local style = marker.widget.style
+    local width = compact and COMPACT_CARD_WIDTH or 216
+    marker.stack_dense = compact
+    style.shadow.size[1] = compact and width + 4 or width
+    style.shadow.size[2] = compact and 28 or 28
+    style.shadow.offset[2] = compact and -1 or -2
+    style.background.size[1] = width
+    style.background.size[2] = compact and 24 or 28
+    style.glow.size[1] = width
+    style.glow.offset[2] = compact and 11 or 13
+    style.accent.offset[1] = -width * 0.5 + 2
+    style.accent.size[2] = compact and 22 or 24
+    local text_height = compact and 22 or 20
+    local name_width = compact and width - 40 or 164
+    style.name.font_size = compact and 10 or 11
+    style.name.size[1] = name_width
+    style.name.size[2] = text_height
+    style.name.offset[1] = compact and -14 or -18
+    style.name_shadow.font_size = compact and 10 or 11
+    style.name_shadow.size[1] = name_width
+    style.name_shadow.size[2] = text_height
+    style.name_shadow.offset[1] = compact and -13 or -17
+    style.distance.font_size = compact and 10 or 11
+    style.distance.size[1] = compact and 26 or 34
+    style.distance.size[2] = text_height
+    style.distance.offset[1] = compact and width * 0.5 - 17 or 88
 end
 
 template.create_widget_defintion = function(_, scenegraph_id)
@@ -88,23 +118,41 @@ local last_layout_t
 local function layout_markers(t)
     if t ~= nil and last_layout_t == t then return end
     last_layout_t = t
-    local markers = {}
+    local markers, close_markers = {}, {}
     local max_distance = mod.get_pickup_distance()
     for unit, marker in pairs(mod.pickup_marker_refs) do
         local widget = marker.widget
         local distance = widget and widget.content.distance
         if ALIVE[unit] and marker.draw and distance and distance <= max_distance then
             local data = marker.data or mod.get_pickup_data(unit)
-            marker.stack_hidden = false
             widget.content.name = data and data.name or "Pickup"
-            markers[#markers + 1] = {
+            local item = {
                 marker = marker,
                 x = widget.offset[1],
                 y = widget.offset[2],
                 distance = distance,
                 name = data and data.name or "Pickup",
             }
+            local collection = distance < MIN_STACK_DISTANCE and close_markers or markers
+            collection[#collection + 1] = item
         end
+    end
+
+    for i = 1, #close_markers do
+        local item = close_markers[i]
+        apply_stack_density(item.marker, true)
+        local state = transition_states[item.marker.unit]
+        if not state then
+            state = { x = 0, y = 0, last_t = t }
+            transition_states[item.marker.unit] = state
+        end
+        local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
+        state.last_t = t or state.last_t
+        local alpha = 1 - math.exp(-STACK_SPEED * dt)
+        state.x = state.x + (0 - state.x) * alpha
+        state.y = state.y + (0 - state.y) * alpha
+        item.marker.widget.offset[1] = item.x + state.x
+        item.marker.widget.offset[2] = item.y + state.y
     end
     table.sort(markers, function(a, b)
         if a.name ~= b.name then return a.name < b.name end
@@ -112,7 +160,7 @@ local function layout_markers(t)
         return tostring(a.marker.unit) < tostring(b.marker.unit)
     end)
 
-    -- ponytail: pickup counts are tiny; connected overlap scans beat a spatial index here.
+    -- ponytail: pickup counts are tiny; connected screen components and lane scans stay simpler than an index.
     local assigned = {}
     for i = 1, #markers do
         if not assigned[i] then
@@ -125,8 +173,8 @@ local function layout_markers(t)
                 for j = 1, #markers do
                     local candidate = markers[j]
                     if not assigned[j]
-                        and math.abs(source.x - candidate.x) < template.size[1]
-                        and math.abs(source.y - candidate.y) < template.size[2] then
+                        and math.abs(source.x - candidate.x) < COMPACT_CARD_WIDTH
+                        and math.abs(source.y - candidate.y) < 24 then
                         assigned[j] = true
                         cluster[#cluster + 1] = candidate
                         queue[#queue + 1] = j
@@ -145,35 +193,27 @@ local function layout_markers(t)
                 anchor_y = anchor_y + cluster[j].y
             end
             anchor_x, anchor_y = anchor_x / #cluster, anchor_y / #cluster
-            local visible_count = math.min(#cluster, MAX_STACK_ROWS)
-            local overflow = #cluster - visible_count
-            local first_y = anchor_y + (visible_count - 1) * (template.size[2] + STACK_GAP) * 0.5
+            local compact = true
+            local row_step = compact and 24 + STACK_GAP or template.size[2] + STACK_GAP
+            local first_y = anchor_y + (#cluster - 1) * row_step * 0.5
             for j = 1, #cluster do
                 local item = cluster[j]
-                item.marker.stack_hidden = j > visible_count
-                if j == visible_count and overflow > 0 then
-                    item.marker.widget.content.name = item.name .. "  +" .. overflow
+                apply_stack_density(item.marker, compact)
+                local target_x = #cluster > 1 and anchor_x or item.x
+                local target_y = #cluster > 1
+                    and first_y - (j - 1) * row_step or item.y
+                local state = transition_states[item.marker.unit]
+                if not state then
+                    state = { x = 0, y = 0, last_t = t }
+                    transition_states[item.marker.unit] = state
                 end
-                if item.marker.stack_hidden then
-                    local hidden_state = transition_states[item.marker.unit]
-                    if hidden_state then hidden_state.last_t = t or hidden_state.last_t end
-                else
-                    local target_x = #cluster > 1 and anchor_x or item.x
-                    local target_y = #cluster > 1
-                        and first_y - (j - 1) * (template.size[2] + STACK_GAP) or item.y
-                    local state = transition_states[item.marker.unit]
-                    if not state then
-                        state = { x = 0, y = 0, last_t = t }
-                        transition_states[item.marker.unit] = state
-                    end
-                    local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
-                    state.last_t = t or state.last_t
-                    local alpha = 1 - math.exp(-STACK_SPEED * dt)
-                    state.x = state.x + (target_x - item.x - state.x) * alpha
-                    state.y = state.y + (target_y - item.y - state.y) * alpha
-                    item.marker.widget.offset[1] = item.x + state.x
-                    item.marker.widget.offset[2] = item.y + state.y
-                end
+                local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
+                state.last_t = t or state.last_t
+                local alpha = 1 - math.exp(-STACK_SPEED * dt)
+                state.x = state.x + (target_x - item.x - state.x) * alpha
+                state.y = state.y + (target_y - item.y - state.y) * alpha
+                item.marker.widget.offset[1] = item.x + state.x
+                item.marker.widget.offset[2] = item.y + state.y
             end
         end
     end
@@ -216,10 +256,6 @@ template.update_function = function(_, _, widget, marker, _, _, t)
         return
     end
     layout_markers(t)
-    if marker.stack_hidden then
-        widget.visible = false
-        return
-    end
     local max_distance = mod.get_pickup_distance()
     local fade_start = max_distance * 0.6
     local fade = distance <= fade_start and 1
@@ -233,11 +269,12 @@ template.update_function = function(_, _, widget, marker, _, _, t)
         alpha, data.color[2], data.color[3], data.color[4]
     local glow_color = widget.style.glow.color
     glow_color[1], glow_color[2], glow_color[3], glow_color[4] =
-        math.floor(70 * fade + 0.5), data.color[2], data.color[3], data.color[4]
-    widget.style.name_shadow.text_color[1] = math.floor(180 * fade + 0.5)
+        math.floor((marker.stack_dense and 45 or 70) * fade + 0.5),
+        data.color[2], data.color[3], data.color[4]
+    widget.style.name_shadow.text_color[1] = math.floor((marker.stack_dense and 140 or 180) * fade + 0.5)
     widget.style.distance.text_color[1] = math.floor(255 * fade + 0.5)
-    widget.style.background.color[1] = math.floor(205 * fade + 0.5)
-    widget.style.shadow.color[1] = math.floor(120 * fade + 0.5)
+    widget.style.background.color[1] = math.floor((marker.stack_dense and 125 or 205) * fade + 0.5)
+    widget.style.shadow.color[1] = math.floor((marker.stack_dense and 55 or 120) * fade + 0.5)
     local floor_distance = math.floor(distance)
     if floor_distance ~= marker.last_dist then
         marker.last_dist = floor_distance
