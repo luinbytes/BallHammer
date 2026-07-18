@@ -1277,6 +1277,16 @@ input_handler._frame = 21
 local trigger_pressed, _, _, trigger_hold = parse_network_input(10)
 assert(trigger_pressed and trigger_hold,
     "triggerbot fire must be written into Darktide's networked input frame")
+weapon_action_component.template.action_inputs = { shoot_charge = {} }
+weapon_action_component.start_t = 1.55
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.05, 20
+)
+input_handler._frame = 21
+alternate_pressed, _, _, alternate_hold = parse_network_input(10.5)
+assert(alternate_pressed and alternate_hold,
+    "triggerbot must send a click even when the current weapon uses a nonstandard fire action")
+weapon_action_component.template.action_inputs = weapon_action_inputs
 local trigger_replacement = {}
 units[trigger_replacement] = { breed = "renegade_sniper", position = Vector3(12, 20, 0) }
 HEALTH_ALIVE[trigger_replacement] = true

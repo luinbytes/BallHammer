@@ -2208,7 +2208,12 @@ mod:hook("HumanInputHandler", "_parse_input", function(
         semi_auto_pressed_action_t[self] = nil
         return
     end
-    if generated_fire then input_cache[hold_index][index] = true end
+    if generated_fire then
+        input_cache[hold_index][index] = true
+        input_cache[press_index][index] = true
+        semi_auto_pressed_action_t[self] = nil
+        return
+    end
     if input_cache[press_index][index] then return end
 
     local unit_data = ScriptUnit.has_extension(player_unit, "unit_data_system")
