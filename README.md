@@ -21,12 +21,12 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Melee-aware aim range limits mouse-one targeting to enemies inside the current weapon sweep reach
 - Optional timed repeat fire for press-driven, non-automatic weapons whenever mouse one is held
 - Optional local weapon recoil and spread suppression without camera compensation
-- Collision-spaced pickup cards with contained name and distance regions, fixed screen sizing, category accents, distance fading, and distinct Med, Concentration, Combat, and Celerity Stimm labels
+- Collision-spaced pickup cards with compact stacking, fixed screen sizing, category accents, distance fading, category presets, custom per-pickup filters, and distinct Med, Concentration, Combat, and Celerity Stimm labels
 - Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects
 - Armor and Weakspot Director ranks visible hit zones using the current weapon damage profile, live armor overrides, shields, and weakspot finesse; triggerbot skips invulnerable shots and rage mode can choose another target
-- Threat Interceptor marks committed hound, trapper, mutant, sniper, flamer, grenade, and positively identified elite-overhead attacks with the planned reaction and impact countdown
-- Diagnostic opt-in defensive reactions use bounded safe-window timing, preserve physical input by default, dodge committed specialists, block verified overheads, and can switch to melee when enough time remains; automatic inputs require Diagnostic Logging until live timing is verified
-- Diagnostic opt-in Guard Brain preserves a configurable stamina reserve and pushes only when at least three nearby melee threats cover the available retreat directions; automatic inputs require Diagnostic Logging until live timing is verified
+- Threat Interceptor marks committed hound, trapper, mutant, rager, sniper, flamer, grenade, and verified overhead attacks while a HUD shows the planned reaction and impact countdown
+- Opt-in defensive reactions use bounded safe-window timing, preserve held attacks until the final dodge window, keep the player's movement direction, and dodge committed specialist, rager, and overhead attacks
+- Opt-in Guard Brain preserves a configurable stamina reserve and pushes only when at least three nearby melee threats cover the available retreat directions
 - Opt-in Warp and Heat Governor predicts the next resource increase, stops unsafe generated shots, and can use the current weapon's native quell or non-damaging vent input when no nearby threat exists
 - Diagnostic logging records threat timing and reaction decisions for live compatibility checks without changing the safe defaults
 
@@ -36,7 +36,9 @@ Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains s
 
 ESP can also be toggled by entering `/esp` in the in-game chat or by assigning **Toggle ESP Keybind**. Aimbot and triggerbot retain a target only while it stays inside their FOV; rage mode retains any visible on-screen target. Releasing the activation clears the lock.
 
-Threat markers and armor-aware hit-zone selection are enabled by default. Automatic threat reactions, Guard Brain, emergency melee switching, resource governing, automatic quell or safe vent, emergency physical-input override, and diagnostic logging are all opt-in. Unknown or changed game states remain marker-only rather than guessing an input.
+Pickup ESP defaults to all pickups and can show only supplies, stimms, crafting materials, mission items, or a custom per-item selection.
+
+Threat markers and armor-aware hit-zone selection are enabled by default. Automatic threat reactions, Guard Brain, resource governing, automatic quell or safe vent, emergency physical-input override, and diagnostic logging are all opt-in. Diagnostic logging records decisions but does not gate automatic reactions. Unknown or changed game states remain marker-only rather than guessing an input.
 
 ## Requirements
 
