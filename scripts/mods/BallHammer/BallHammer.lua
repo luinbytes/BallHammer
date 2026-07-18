@@ -887,12 +887,8 @@ local function has_line_of_sight(physics_world, target_unit, origin, direction, 
         direction,
         distance,
         "all",
-        "types",
-        "both",
-        "max_hits",
-        256,
         "collision_filter",
-        "filter_player_character_shooting_raycast"
+        "filter_interactable_line_of_sight_marker_check"
     )
 
     if not hits then return true end
@@ -2082,7 +2078,16 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         physics_world, visibility_origin, camera_forward,
         distance_limit, fov, dt, preferred_target, mode, on_screen
     )
-    set_aim_preview(target, target_position, mode, target_distance)
+    if target_position or mode == "rage" then
+        set_aim_preview(target, target_position, mode, target_distance)
+    else
+        local preview_position, _, preview_target, preview_distance = select_aim_target(
+            physics_world, visibility_origin, camera_forward,
+            aim_distance, fov, dt, nil, "preview", on_screen
+        )
+        set_aim_preview(preview_target, preview_position, mode, preview_distance)
+        clear_aim_lock()
+    end
     if not target_position then return end
 
     local smoothness = mode == "rage" and rage_smoothness

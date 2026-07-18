@@ -99,6 +99,47 @@ assert(nearby_widget.offset[2] > third_widget.offset[2]
     and nearby_widget.offset[2] - third_widget.offset[2] >= template.size[2]
     and third_widget.offset[2] - widget.offset[2] >= template.size[2],
     "pickup stacks should be alphabetically sorted without card overlap")
+local extra_names = { "Celerity Stimm", "Combat Stimm", "Grenade", "Medkit" }
+for i = 1, #extra_names do
+    local extra_unit = {}
+    ALIVE[extra_unit] = true
+    local extra_widget = pickup_widget(82 + i, 96 + i * 3, 98 + i)
+    local extra_marker = {
+        unit = extra_unit,
+        data = { name = extra_names[i], color = { 255, 255, 255, 255 } },
+        draw = true,
+        widget = extra_widget,
+    }
+    template.on_enter(extra_widget, extra_marker)
+    markers[#markers + 1] = extra_marker
+    anchors[#anchors + 1] = { 96 + i * 3, 98 + i }
+end
+update_stack(1.5)
+update_stack(1.8)
+local visible_count, overflow_label = 0, false
+for i = 1, #markers do
+    if markers[i].widget.visible then visible_count = visible_count + 1 end
+    if markers[i].widget.content.name:find("+2", 1, true) then overflow_label = true end
+end
+assert(visible_count == 5 and overflow_label,
+    "large pickup stacks should cap at five rows and show the folded pickup count")
+update_stack(10)
+local before_camera_move = {}
+for i = 1, #markers do
+    if markers[i].widget.visible then
+        before_camera_move[i] = {
+            markers[i].widget.offset[1], markers[i].widget.offset[2],
+        }
+    end
+    anchors[i][1] = anchors[i][1] + 180
+    anchors[i][2] = anchors[i][2] + 70
+end
+update_stack(10.01)
+for i, before in pairs(before_camera_move) do
+    assert(math.abs(markers[i].widget.offset[1] - before[1] - 180) < 0.001
+        and math.abs(markers[i].widget.offset[2] - before[2] - 70) < 0.001,
+        "camera projection changes should move pickup stacks immediately without smoothing")
+end
 enabled = false
 template.update_function(nil, nil, widget, marker)
 assert(not widget.visible, "pickup labels should respect their independent setting")

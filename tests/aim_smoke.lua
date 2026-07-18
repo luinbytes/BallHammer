@@ -527,9 +527,13 @@ PhysicsWorld = {
         local arguments = { ... }
         local options = {}
         for i = 1, #arguments, 2 do options[arguments[i]] = arguments[i + 1] end
-        assert(cast_type == "all" and options.types == "both" and options.max_hits == 256
-            and options.collision_filter == "filter_player_character_shooting_raycast",
-            "aim visibility should use the real weapon ray collision filter")
+        assert(cast_type == "all", "aim visibility should collect line-of-sight hits")
+        if options.collision_filter == "filter_player_character_shooting_raycast" then
+            return { { false, false, false, { unit = player_unit } } }
+        end
+        assert(options.collision_filter == "filter_interactable_line_of_sight_marker_check"
+            and options.types == nil and options.max_hits == nil,
+            "aim visibility should use the proven marker line-of-sight filter")
         if director_actor then return { { false, false, false, director_actor } } end
         local direction_x = Vector3.to_elements(direction)
         if direction_x < 0.15 then return { { false, false, false, {} } } end
@@ -985,6 +989,18 @@ local outside_preview, _, outside_radius = mod.get_aim_preview()
 assert(outside_preview == outside_fov and outside_radius,
     "idle preview should place the acquisition circle on the closest on-screen target even before acquisition: "
         .. tostring(outside_preview == outside_fov) .. " " .. tostring(outside_radius))
+camera_rotation = Vector3.normalize(Vector3(0, 20, 1.8))
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_two_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 0, 3.98
+)
+local ads_preview, _, ads_radius = mod.get_aim_preview()
+assert(orientation.yaw == 0 and orientation.pitch == 0,
+    "ADS outside the displayed target circle must not acquire that target")
+assert(ads_preview == outside_fov and ads_radius,
+    "ADS outside the displayed target circle should keep that circle visible")
+held_action = nil
 HEALTH_ALIVE[outside_fov] = false
 
 local lock_left, lock_right = {}, {}
