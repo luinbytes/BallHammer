@@ -210,6 +210,15 @@ local threat_seen_at = setmetatable({}, { __mode = "k" })
 local resource_history = {}
 local director_score_cache = setmetatable({}, { __mode = "k" })
 local governor_suppress_fire = false
+local hud_aim_mode = nil
+local show_system_status = true
+local show_threat_compass = true
+local threat_compass_range = 80
+local show_player_list = true
+local hud_opacity = 80
+local aim_key_display = "LMB"
+local trigger_key_display = "OFF"
+local rage_key_display = "UNBOUND"
 
 local function warn_once(key, message)
     if survival_warning[key] then return end
@@ -233,6 +242,70 @@ mod.get_threat_indicator = function()
     local action = active_threat.action or active_threat.kind
     local remaining = math.max(active_threat.impact_t - survival_t, 0)
     return string.format("%s %.1f", string.upper(action), remaining)
+end
+local hud_status_rows = {
+    { label = "AIM" },
+    { label = "TRIGGER" },
+    { label = "RAGE" },
+    { label = "GUARD" },
+    { label = "GOVERNOR" },
+}
+
+local function key_label(activation, setting_id)
+    if activation == "left_mouse" then return "LMB" end
+    if activation == "right_mouse" then return "RMB" end
+    if activation == "both_mouse" then return "L/RMB" end
+    if activation == "off" then return "OFF" end
+    local value = mod:get(setting_id)
+    if type(value) ~= "table" or #value == 0 then return "UNBOUND" end
+    local parts = {}
+    local mouse_names = { extra_1 = "MOUSE4", extra_2 = "MOUSE5" }
+    for i = 1, #value do
+        local key = tostring(value[i])
+        parts[i] = mouse_names[key] or key:gsub("^keyboard_", ""):upper()
+    end
+    return table.concat(parts, "+")
+end
+
+local function set_status(row, key, state, tone)
+    row.key, row.state, row.tone = key, state, tone
+end
+
+mod.get_hud_status_rows = function()
+    local aim_state = locked_mode == "aim" and locked_target and "LOCKED"
+        or hud_aim_mode == "aim" and "ACTIVE" or "IDLE"
+    set_status(hud_status_rows[1], aim_key_display, aim_state,
+        aim_state == "LOCKED" and "active" or aim_state == "ACTIVE" and "ready" or "idle")
+
+    local trigger_state = requested_auto_fire_mode == "trigger" and "FIRING"
+        or locked_mode == "trigger" and locked_target and "LOCKED"
+        or hud_aim_mode == "trigger" and "ACTIVE" or "IDLE"
+    set_status(hud_status_rows[2], trigger_key_display, trigger_state,
+        trigger_state == "FIRING" and "danger"
+        or trigger_state ~= "IDLE" and "active" or "idle")
+
+    local rage_state = requested_auto_fire_mode == "rage" and "FIRING"
+        or locked_mode == "rage" and locked_target and "LOCKED"
+        or hud_aim_mode == "rage" and "ACTIVE" or "IDLE"
+    set_status(hud_status_rows[3], rage_key_display, rage_state,
+        rage_state == "FIRING" and "danger" or rage_state ~= "IDLE" and "active" or "idle")
+
+    local guard_state = requested_defense and string.upper(requested_defense.action or "ACTIVE")
+        or enable_guard_brain and "READY" or "OFF"
+    set_status(hud_status_rows[4], "AUTO", guard_state,
+        requested_defense and "danger" or enable_guard_brain and "ready" or "idle")
+
+    local governor_state = governor_suppress_fire and "BLOCKED"
+        or requested_vent and "VENTING" or enable_resource_governor and "READY" or "OFF"
+    set_status(hud_status_rows[5], "AUTO", governor_state,
+        governor_suppress_fire and "danger" or requested_vent and "active"
+        or enable_resource_governor and "ready" or "idle")
+    return hud_status_rows
+end
+mod.get_hud_threats = function() return unit_data_map, active_threat end
+mod.get_hud_settings = function()
+    return show_system_status, show_threat_compass, threat_compass_range,
+        show_player_list, hud_opacity
 end
 mod.get_enable_nameplates = function() return enable_nameplates end
 mod.get_max_distance      = function() return max_distance end
@@ -308,6 +381,14 @@ local function refresh_settings()
     enable_auto_vent = mod:get("enable_auto_vent")
     peril_target = mod:get("peril_target") / 100
     heat_target = mod:get("heat_target") / 100
+    show_system_status = mod:get("show_system_status") ~= false
+    show_threat_compass = mod:get("show_threat_compass") ~= false
+    threat_compass_range = mod:get("threat_compass_range") or 80
+    show_player_list = mod:get("show_player_list") ~= false
+    hud_opacity = mod:get("hud_opacity") or 80
+    aim_key_display = key_label(aim_activation, "aim_key")
+    trigger_key_display = key_label(trigger_activation, "trigger_key")
+    rage_key_display = key_label("custom", "rage_key")
     refresh_marker_aim_node()
 end
 
@@ -615,14 +696,15 @@ mod.on_setting_changed = function(setting_id)
        setting_id == "aim_curve" or setting_id == "aim_location" or setting_id == "aim_activation"
        or setting_id == "show_aim_fov" or setting_id == "aim_fov_opacity"
        or setting_id == "aim_fov_red" or setting_id == "aim_fov_green"
-       or setting_id == "aim_fov_blue" then
+       or setting_id == "aim_fov_blue" or setting_id == "aim_key" then
         refresh_settings()
         return
     end
 
     if setting_id == "trigger_activation" or setting_id == "trigger_fov"
         or setting_id == "trigger_fire_fov" or setting_id == "trigger_smoothness"
-        or setting_id == "rage_distance" or setting_id == "rage_smoothness" then
+        or setting_id == "rage_distance" or setting_id == "rage_smoothness"
+        or setting_id == "trigger_key" or setting_id == "rage_key" then
         refresh_settings()
         return
     end
@@ -652,6 +734,13 @@ mod.on_setting_changed = function(setting_id)
         enable_auto_fire = mod:get("enable_auto_fire")
         enable_no_recoil = mod:get("enable_no_recoil")
         enable_no_spread = mod:get("enable_no_spread")
+        return
+    end
+
+    if setting_id == "show_system_status" or setting_id == "show_threat_compass"
+        or setting_id == "threat_compass_range" or setting_id == "show_player_list"
+        or setting_id == "hud_opacity" then
+        refresh_settings()
         return
     end
 
@@ -2304,6 +2393,7 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
 
     local player = Managers.player and Managers.player:local_player(1)
     if not player or unit ~= player.player_unit or not player:unit_is_alive() then
+        hud_aim_mode = nil
         clear_aim_lock()
         return
     end
@@ -2328,6 +2418,7 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     elseif activation_is_held(aim_activation, aimbot_held, self._input_extension) then
         mode = "aim"
     end
+    hud_aim_mode = mode
     local camera_forward = Quaternion.forward(first_person.rotation)
     local on_screen = function(position) return self:is_within_default_view(position) end
     if not mode then
@@ -2420,6 +2511,7 @@ local function teardown_runtime(for_reload)
     requested_auto_fire_mode, requested_auto_fire_until = nil, nil
     requested_defense, requested_vent = nil, nil
     governor_suppress_fire = false
+    hud_aim_mode = nil
     companion_target = nil
     companion_waiting_for_damage = false
     companion_wait_deadline_t = 0

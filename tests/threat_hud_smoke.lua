@@ -1,7 +1,36 @@
 local threat_text = "DODGE 0.2"
+local show_status, show_compass, show_players = true, true, true
+local threat_unit = {}
+local player_unit = {}
+local positions = {
+    [threat_unit] = { x = 10, y = 10, z = 3 },
+    [player_unit] = { x = 0, y = 2, z = 0 },
+}
+local threat_data = {
+    [threat_unit] = {
+        name = "Mutant",
+        flag = "SPECIAL",
+        companion_danger = 1,
+    },
+}
+local active_threat = { source = threat_unit }
+local status_rows = {
+    { label = "AIM", key = "LMB", state = "LOCKED", tone = "active" },
+    { label = "TRIGGER", key = "RMB", state = "FIRING", tone = "danger" },
+    { label = "RAGE", key = "Z", state = "IDLE", tone = "idle" },
+    { label = "GUARD", key = "AUTO", state = "READY", tone = "ready" },
+    { label = "GOVERNOR", key = "AUTO", state = "OFF", tone = "idle" },
+}
 local mod = {
     enabled = true,
     get_threat_indicator = function() return threat_text end,
+    get_hud_status_rows = function() return status_rows end,
+    get_hud_threats = function()
+        return threat_data, active_threat
+    end,
+    get_hud_settings = function()
+        return show_status, show_compass, 80, show_players, 80
+    end,
 }
 
 get_mod = function() return mod end
@@ -13,11 +42,105 @@ package.preload["scripts/managers/ui/ui_widget"] = function()
         return { passes = passes, scenegraph_id = scenegraph_id }
     end }
 end
+package.preload["scripts/foundation/utilities/script_camera"] = function()
+    return { position = function(camera) return camera.position end }
+end
+package.preload[
+    "scripts/extension_systems/visual_loadout/utilities/player_unit_visual_loadout"
+] = function()
+    return { slot_equipped = function() return false end }
+end
+package.preload["scripts/utilities/ammo"] = function()
+    return {
+        current_ammo_in_clips = function() return 10 end,
+        max_ammo_in_clips = function() return 20 end,
+    }
+end
+
+local vector_mt = {
+    __sub = function(a, b)
+        return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, vector_mt)
+    end,
+}
+local function vector(x, y, z)
+    return setmetatable({ x = x, y = y, z = z }, vector_mt)
+end
+for unit, value in pairs(positions) do positions[unit] = vector(value.x, value.y, value.z) end
+
+Vector3 = {
+    length = function(value)
+        return math.sqrt(value.x * value.x + value.y * value.y + value.z * value.z)
+    end,
+    normalize = function(value)
+        local length = math.sqrt(value.x * value.x + value.y * value.y + value.z * value.z)
+        return length > 0 and vector(value.x / length, value.y / length, value.z / length)
+            or vector(0, 0, 0)
+    end,
+    cross = function(a, b)
+        return vector(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x)
+    end,
+    dot = function(a, b) return a.x * b.x + a.y * b.y + a.z * b.z end,
+    up = function() return vector(0, 0, 1) end,
+}
+Quaternion = { forward = function() return vector(0, 1, 0) end }
+Camera = { local_rotation = function() return {} end }
+Unit = { world_position = function(unit) return positions[unit] end }
+ALIVE = { [threat_unit] = true, [player_unit] = true }
+math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+
+local health = { current_health_percent = function() return 0.75 end }
+local toughness = { current_toughness_percent = function() return 0.5 end }
+local unit_data = {
+    has_component = function(_, name) return name == "slot_secondary" end,
+    read_component = function(_, name)
+        if name == "slot_secondary" then
+            return { current_ammunition_reserve = 30, max_ammunition_reserve = 60 }
+        end
+        if name == "disabled_character_state" then return { is_disabled = false } end
+        if name == "inventory" then return {} end
+    end,
+}
+local ability = { remaining_ability_charges = function() return 2 end }
+ScriptUnit = { has_extension = function(unit, name)
+    if unit ~= player_unit then return nil end
+    return ({
+        health_system = health,
+        toughness_system = toughness,
+        unit_data_system = unit_data,
+        visual_loadout_system = {},
+        ability_system = ability,
+    })[name]
+end }
+local player = {
+    player_unit = player_unit,
+    name = function() return "Veteran" end,
+    profile = function() return { archetype = { name = "veteran" } } end,
+    unit_is_alive = function() return true end,
+}
+local camera = { position = vector(0, 0, 0) }
+Managers = { player = {
+    players = function() return { one = player } end,
+    local_player = function() return player end,
+} }
+
+local function make_widget(definition)
+    local widget = { content = {}, style = {}, offset = { 0, 0, 0 } }
+    for _, pass in ipairs(definition.passes) do
+        if pass.style_id then widget.style[pass.style_id] = pass.style end
+        if pass.value_id then widget.content[pass.value_id] = pass.value end
+    end
+    return widget
+end
 
 HudElementBase = {
-    init = function(self, _, _, _, definitions)
+    init = function(self, parent, _, _, definitions)
+        self._parent = parent
         self.definitions = definitions
-        self._widgets_by_name = { threat = { content = {} } }
+        self._widgets_by_name = {}
+        for name, definition in pairs(definitions.widget_definitions) do
+            self._widgets_by_name[name] = make_widget(definition)
+        end
     end,
     update = function() end,
 }
@@ -29,23 +152,52 @@ end
 
 local ThreatHud = dofile("scripts/mods/BallHammer/BallHammerThreatHud.lua")
 local element = setmetatable({}, { __index = ThreatHud })
-element:init(nil, 1, 1)
-local position = element.definitions.scenegraph_definition.threat.position
-assert(position[1] == 0 and position[2] > 0,
-    "danger indicator must use a fixed screen-space position below the crosshair")
+local parent = { player_camera = function() return camera end }
+element:init(parent, 1, 1)
+
+local threat_position = element.definitions.scenegraph_definition.threat.position
+assert(threat_position[1] == 0 and threat_position[2] > 0,
+    "danger indicator must stay fixed below the crosshair")
 
 element:update(0.016, 1, nil, {}, nil)
 assert(element._widgets_by_name.threat.content.visible
     and element._widgets_by_name.threat.content.text == "DODGE 0.2",
     "active danger should render in the static HUD widget")
-local x, y = position[1], position[2]
-element:update(0.016, 2, nil, {}, nil)
-assert(position[1] == x and position[2] == y,
-    "camera updates must never move the screen-space danger indicator")
+assert(element._widgets_by_name.status_header.content.visible
+    and element._widgets_by_name.status_2.content.state == "FIRING",
+    "system panel should render configured keys and live states")
+assert(element._widgets_by_name.compass.content.visible
+    and element._widgets_by_name.compass_threat_1.content.visible
+    and element._widgets_by_name.compass_threat_1.offset[1] > 0
+    and element._widgets_by_name.compass_threat_1.content.text:find("Mutant", 1, true),
+    "threat compass should project a named threat to its camera-relative bearing")
+assert(element._widgets_by_name.player_header.content.visible
+    and element._widgets_by_name.player_1.content.name == "Veteran"
+    and element._widgets_by_name.player_1.content.stats:find("HP 75", 1, true)
+    and element._widgets_by_name.player_1.content.stats:find("AMMO 50%%"),
+    "squad list should render native health, toughness, ammo, and grenade data")
+
+positions[threat_unit] = vector(-10, 10, 3)
+element:update(0.016, 1.02, nil, {}, nil)
+assert(element._widgets_by_name.compass_threat_1.offset[1] < 0,
+    "bearing should follow camera-relative movement every frame between scans")
+
+threat_data[threat_unit] = nil
+active_threat = {
+    kind = "grenade",
+    danger_position = { unbox = function() return vector(8, 6, 0) end },
+}
+element:update(0.016, 1.2, nil, {}, nil)
+assert(element._widgets_by_name.compass_threat_1.content.text:find("GRENADE", 1, true),
+    "committed position-only threats should remain visible on the compass")
 
 threat_text = nil
-element:update(0.016, 3, nil, {}, nil)
-assert(not element._widgets_by_name.threat.content.visible,
-    "the static danger indicator should hide after danger clears")
+show_status, show_compass, show_players = false, false, false
+element:update(0.016, 1.3, nil, {}, nil)
+assert(not element._widgets_by_name.threat.content.visible
+    and not element._widgets_by_name.status_header.content.visible
+    and not element._widgets_by_name.compass.content.visible
+    and not element._widgets_by_name.player_header.content.visible,
+    "every tactical HUD surface should obey its master switch")
 
-print("BallHammer threat HUD smoke: ok")
+print("BallHammer tactical HUD smoke: ok")

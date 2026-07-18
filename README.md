@@ -25,6 +25,7 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects
 - Armor and Weakspot Director ranks visible hit zones using the current weapon damage profile, live armor overrides, shields, and weakspot finesse; triggerbot skips invulnerable shots and rage mode can choose another target
 - Threat Interceptor marks committed hound, trapper, mutant, rager, sniper, flamer, grenade, and verified overhead attacks while a HUD shows the planned reaction and impact countdown
+- Native tactical HUD combines a live system/keybind panel, a camera-relative horizontal threat compass, and compact squad health, toughness, ammo, grenade, class, distance, disable, and objective states in one pooled HUD element
 - Opt-in defensive reactions use bounded safe-window timing, preserve held attacks until the final dodge window, keep the player's movement direction, and dodge committed specialist, rager, and overhead attacks
 - Opt-in Guard Brain preserves a configurable stamina reserve and pushes only when at least three nearby melee threats cover the available retreat directions
 - Opt-in Warp and Heat Governor predicts the next resource increase, stops unsafe generated shots, and can use the current weapon's native quell or non-damaging vent input when no nearby threat exists
@@ -32,13 +33,15 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 
 ## Configuration
 
-Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains separate **ESP**, **Pickup ESP**, **Aimbot**, **Magnet Triggerbot**, **Rage Mode**, **Armor and Weakspot Director**, **Threat Interceptor**, **Guard Brain**, **Warp and Heat Governor**, **Weapon**, and **Companion** sections.
+Open Darktide's **Mod Options**, then select **BallHammer**. Settings are grouped under **Visuals and HUD**, **Aim Assistance**, **Defense and Survival**, and **Weapon and Companion**, with the existing feature sections nested inside them.
 
 ESP can also be toggled by entering `/esp` in the in-game chat or by assigning **Toggle ESP Keybind**. Aimbot and triggerbot retain a target only while it stays inside their FOV; rage mode retains any visible on-screen target. Releasing the activation clears the lock.
 
 Pickup ESP defaults to all pickups and can show only supplies, stimms, crafting materials, mission items, or a custom per-item selection.
 
 Threat markers and armor-aware hit-zone selection are enabled by default. Automatic threat reactions, Guard Brain, resource governing, automatic quell or safe vent, emergency physical-input override, and diagnostic logging are all opt-in. Diagnostic logging records decisions but does not gate automatic reactions. Unknown or changed game states remain marker-only rather than guessing an input.
+
+The Tactical HUD section independently controls the system panel, horizontal threat compass, compass range, squad list, and shared opacity. Darktide's native HUD scale also applies to the complete element.
 
 ## Requirements
 

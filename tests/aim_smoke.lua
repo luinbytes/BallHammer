@@ -594,6 +594,14 @@ PhysicsWorld = {
 }
 
 dofile("scripts/mods/BallHammer/BallHammer.lua")
+hud_settings = { mod.get_hud_settings() }
+assert(hud_settings[1] and hud_settings[2] and hud_settings[3] == 80
+    and hud_settings[4] and hud_settings[5] == 80,
+    "tactical HUD should expose safe defaults to the registered native element")
+hud_rows = mod.get_hud_status_rows()
+assert(#hud_rows == 5 and hud_rows[1].label == "AIM" and hud_rows[1].key == "LMB"
+    and hud_rows[4].state == "OFF" and hud_rows[5].state == "OFF",
+    "system status should expose configured bindings and live subsystem states")
 local function apply_delayed_hook(object_name, object, method)
     local handler = hooks["delayed." .. object_name .. "." .. method]
     assert(handler, object_name .. "." .. method .. " should use DMF's deferred hook path")
@@ -609,6 +617,13 @@ apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
     CLASS.PlayerUnitWeaponSpreadExtension, "target_style_spread")
 assert(messages[#messages] == "Loaded! - By @luinbytes",
     "load banner should use the requested credit")
+settings.trigger_activation = "custom"
+settings.trigger_key = { "extra_2" }
+mod.on_setting_changed("trigger_key")
+assert(mod.get_hud_status_rows()[2].key == "MOUSE5",
+    "system status should use readable DMF mouse key names")
+settings.trigger_activation = "off"
+mod.on_setting_changed("trigger_activation")
 
 local rotation = {}
 assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread({ _unit = player_unit }, rotation).spread == rotation,

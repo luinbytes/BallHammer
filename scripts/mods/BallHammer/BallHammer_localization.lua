@@ -2,6 +2,11 @@ return {
     mod_name = { en = "BallHammer" },
     mod_description = { en = "All-enemy ESP with persistent aim, triggerbot, rage, and weapon controls" },
 
+    visuals_category = { en = "Visuals and HUD" },
+    aim_category = { en = "Aim Assistance" },
+    defense_category = { en = "Defense and Survival" },
+    utility_category = { en = "Weapon and Companion" },
+
     esp_settings = { en = "ESP" },
     enable_outlines = { en = "Enemy Outlines" },
     outline_distance = { en = "Outline Distance (m)" },
@@ -97,4 +102,11 @@ return {
     enable_companion_target = { en = "Auto-Target Specials" },
     companion_distance = { en = "Auto-Target Distance (m)" },
     enable_auto_whistle = { en = "Auto-Use Dog EMP" },
+
+    hud_settings = { en = "Tactical HUD" },
+    show_system_status = { en = "System Status Panel" },
+    show_threat_compass = { en = "Horizontal Threat Compass" },
+    threat_compass_range = { en = "Threat Compass Range (m)" },
+    show_player_list = { en = "Squad Player List" },
+    hud_opacity = { en = "Tactical HUD Opacity (%%)" },
 }

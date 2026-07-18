@@ -1,6 +1,6 @@
 local mod = get_mod("BallHammer")
 
-return {
+local data = {
     name = mod:localize("mod_name"),
     description = mod:localize("mod_description"),
     is_togglable = true,
@@ -416,6 +416,67 @@ return {
                     },
                 },
             },
+            {
+                setting_id = "hud_settings",
+                type = "group",
+                sub_widgets = {
+                    {
+                        setting_id = "show_system_status",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                    {
+                        setting_id = "show_threat_compass",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                    {
+                        setting_id = "threat_compass_range",
+                        type = "numeric",
+                        default_value = 80,
+                        range = { 10, 150 },
+                        decimals_number = 0,
+                    },
+                    {
+                        setting_id = "show_player_list",
+                        type = "checkbox",
+                        default_value = true,
+                    },
+                    {
+                        setting_id = "hud_opacity",
+                        type = "numeric",
+                        default_value = 80,
+                        range = { 20, 100 },
+                        decimals_number = 0,
+                    },
+                },
+            },
         },
     },
 }
+
+local sections = data.options.widgets
+data.options.widgets = {
+    {
+        setting_id = "visuals_category",
+        type = "group",
+        sub_widgets = { sections[1], sections[2], sections[12] },
+    },
+    {
+        setting_id = "aim_category",
+        type = "group",
+        sub_widgets = { sections[3], sections[4], sections[5], sections[6] },
+    },
+    {
+        setting_id = "defense_category",
+        type = "group",
+        sub_widgets = { sections[7], sections[8], sections[9] },
+    },
+    {
+        setting_id = "utility_category",
+        type = "group",
+        sub_widgets = { sections[10], sections[11] },
+    },
+}
+
+return data
