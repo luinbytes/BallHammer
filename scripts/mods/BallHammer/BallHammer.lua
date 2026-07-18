@@ -79,19 +79,6 @@ local COMPANION_RESCUE_TYPES = {
     consumed = true,
     grabbed = true,
 }
-local HIGH_RISK_MELEE = {
-    chaos_ogryn_executor = true,
-    cultist_berzerker = true,
-    renegade_berzerker = true,
-    renegade_executor = true,
-}
-local RAGER_MELEE = {
-    cultist_berzerker = true,
-    renegade_berzerker = true,
-}
-local CRUSHER_MELEE = { chaos_ogryn_executor = true }
-local MAULER_MELEE = { renegade_executor = true }
-
 -- State
 local unit_data_map       = {}
 local active_markers      = {}
@@ -110,6 +97,7 @@ local horde_marker_requested_at = {}
 local pickup_marker_requested_at = {}
 
 mod.enabled        = true
+mod.esp_enabled    = true
 mod.active_markers = active_markers
 mod.horde_unit_data = horde_unit_data
 mod.horde_active_markers = horde_active_markers
@@ -210,6 +198,7 @@ local threat_seen_at = setmetatable({}, { __mode = "k" })
 mod._fallback_dodge_suppressed_until = setmetatable({}, { __mode = "k" })
 local resource_history = {}
 local director_score_cache = setmetatable({}, { __mode = "k" })
+local clear_active_threat
 local governor_suppress_fire = false
 local hud_aim_mode = nil
 local show_system_status = true
@@ -501,7 +490,8 @@ local function attach_world_markers(world_markers)
     table.clear(pickup_marker_refs)
     mod.aim_marker_ref = nil
     add_aim_marker()
-    if mod.enabled and (enable_nameplates or enable_horde_esp or enable_pickup_esp) then
+    if mod.enabled and mod.esp_enabled
+        and (enable_nameplates or enable_horde_esp or enable_pickup_esp) then
         marker_retry_frames = 10
     end
     return true
@@ -555,6 +545,9 @@ local function pickup_style(pickup_name)
         name, category, filter_id, color = "Grimoire", "mission", "grimoire", { 255, 110, 255, 110 }
     elseif pickup_name:find("tome") then
         name, category, filter_id, color = "Scripture", "mission", "scripture", { 255, 110, 210, 255 }
+    elseif pickup_name:find("luggable") or pickup_name:find("battery") then
+        name, category, filter_id, color = breed_label(pickup_name:gsub("_pickup.*$", "")),
+            "mission", "other", { 255, 210, 220, 235 }
     else
         name, category, filter_id, color = breed_label(pickup_name:gsub("_pickup.*$", "")), "supplies", "other",
             { 255, 210, 220, 235 }
@@ -578,7 +571,7 @@ local function add_pickup_esp(unit)
     local pickup_name = Unit.get_data(unit, "pickup_type")
     if not pickup_name or pickup_is_socketed(unit) then return end
     pickup_unit_data[unit] = pickup_style(pickup_name)
-    if mod.enabled and enable_pickup_esp then add_pickup_marker(unit) end
+    if mod.enabled and mod.esp_enabled and enable_pickup_esp then add_pickup_marker(unit) end
 end
 
 local function add_esp_for_unit(unit)
@@ -609,7 +602,7 @@ local function add_esp_for_unit(unit)
             force_horde_merge = breed.name == "chaos_newly_infected" or breed.name == "chaos_armored_infected",
         }
         aim_target_map[unit] = true
-        if mod.enabled and enable_horde_esp then add_horde_marker(unit) end
+        if mod.enabled and mod.esp_enabled and enable_horde_esp then add_horde_marker(unit) end
         return
     end
 
@@ -633,7 +626,7 @@ local function add_esp_for_unit(unit)
     unit_data_map[unit] = priority_data
     aim_target_map[unit] = true
 
-    if mod.enabled and enable_outlines then
+    if mod.enabled and mod.esp_enabled and enable_outlines then
         local has = false
         if outline_system then
             pcall(function() has = outline_system:has_outline(unit, priority_data.slot) end)
@@ -641,23 +634,23 @@ local function add_esp_for_unit(unit)
         if not has then apply_outline(unit, unit_data_map[unit]) end
     end
 
-    if mod.enabled and enable_nameplates then add_marker(unit) end
+    if mod.enabled and mod.esp_enabled and enable_nameplates then add_marker(unit) end
 end
 
 mod.toggle_esp = function()
-    mod.enabled = not mod.enabled
-    mod:echo("BallHammer: " .. (mod.enabled and "ON" or "OFF"))
-    if not mod.enabled then
+    mod.esp_enabled = not mod.esp_enabled
+    mod:echo("BallHammer ESP: " .. (mod.esp_enabled and "ON" or "OFF"))
+    if not mod.esp_enabled then
         for unit, data in pairs(unit_data_map) do
             remove_outline(unit, data)
             kill_marker(unit)
         end
         for unit, _ in pairs(horde_unit_data) do kill_horde_marker(unit) end
         for unit in pairs(pickup_unit_data) do kill_pickup_marker(unit) end
-    else
+    elseif mod.enabled then
         for unit, data in pairs(unit_data_map) do
             if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
-                apply_outline(unit, data)
+                if enable_outlines then apply_outline(unit, data) end
                 if enable_nameplates then add_marker(unit) end
             end
         end
@@ -695,7 +688,6 @@ mod.rage_held = function(held)
 end
 
 mod.on_setting_changed = function(setting_id)
-    mod:echo("setting_changed: " .. tostring(setting_id))
     if not setting_id then return end
 
     if setting_id == "aim_distance" or setting_id == "aim_fov" or setting_id == "aim_smoothness" or
@@ -727,7 +719,12 @@ mod.on_setting_changed = function(setting_id)
             local data = unit_data_map[active_threat.source]
             if data then data.threat_text = nil end
         end
-        if not enable_threat_reactions and not enable_guard_brain then requested_defense = nil end
+        if requested_defense and (
+            not enable_threat_reactions and requested_defense.owner == "threat_reactions"
+            or not enable_guard_brain and requested_defense.owner == "guard_brain"
+        ) then
+            requested_defense = nil
+        end
         if not enable_resource_governor then
             governor_suppress_fire = false
             requested_vent = nil
@@ -771,7 +768,7 @@ mod.on_setting_changed = function(setting_id)
 
     if setting_id == "enable_horde_esp" then
         enable_horde_esp = mod:get("enable_horde_esp")
-        if enable_horde_esp and mod.enabled then
+        if enable_horde_esp and mod.enabled and mod.esp_enabled then
             for unit, _ in pairs(horde_unit_data) do
                 if HEALTH_ALIVE and HEALTH_ALIVE[unit] then add_horde_marker(unit) end
             end
@@ -788,7 +785,7 @@ mod.on_setting_changed = function(setting_id)
 
     if setting_id == "enable_pickup_esp" then
         enable_pickup_esp = mod:get("enable_pickup_esp")
-        if enable_pickup_esp and mod.enabled then
+        if enable_pickup_esp and mod.enabled and mod.esp_enabled then
             for unit in pairs(pickup_unit_data) do
                 if ALIVE and ALIVE[unit] then add_pickup_marker(unit) end
             end
@@ -818,14 +815,14 @@ mod.on_setting_changed = function(setting_id)
         local old = enable_outlines
         enable_outlines = mod:get("enable_outlines")
         if enable_outlines == old then return end
-        if enable_outlines then
+        if enable_outlines and mod.esp_enabled then
             for unit, data in pairs(unit_data_map) do
                 if HEALTH_ALIVE and HEALTH_ALIVE[unit] then apply_outline(unit, data) end
             end
         else
             for unit, data in pairs(unit_data_map) do remove_outline(unit, data) end
         end
-        if enable_nameplates then
+        if enable_nameplates and mod.esp_enabled then
             for unit, _ in pairs(unit_data_map) do kill_marker(unit) end
             marker_retry_frames = 10
         end
@@ -836,7 +833,7 @@ mod.on_setting_changed = function(setting_id)
         local old = enable_nameplates
         enable_nameplates = mod:get("enable_nameplates")
         if enable_nameplates == old then return end
-        if enable_nameplates then
+        if enable_nameplates and mod.esp_enabled then
             marker_retry_frames = 10
         else
             for unit, _ in pairs(unit_data_map) do kill_marker(unit) end
@@ -877,7 +874,7 @@ mod:hook_safe(CLASS.OutlineSystem, "on_add_extension", function(self, world, uni
     if not unit_data_map[unit] and not horde_unit_data[unit] then add_esp_for_unit(unit) end
     local data = unit_data_map[unit]
     if not data then return end
-    if enable_outlines then
+    if mod.esp_enabled and enable_outlines then
         local has = false
         pcall(function() has = self:has_outline(unit, data.slot) end)
         if not has then
@@ -888,10 +885,11 @@ mod:hook_safe(CLASS.OutlineSystem, "on_add_extension", function(self, world, uni
             end)
         end
     end
-    if enable_nameplates then add_marker(unit) end
+    if mod.esp_enabled and enable_nameplates then add_marker(unit) end
 end)
 
 mod:hook_safe(CLASS.OutlineSystem, "on_remove_extension", function(self, unit, extension_name)
+    if active_threat and active_threat.source == unit then clear_active_threat() end
     kill_marker(unit)
     kill_horde_marker(unit)
     unit_data_map[unit] = nil
@@ -907,21 +905,21 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
     -- Retry markers for pre-spawned units
     if marker_retry_frames > 0 then
         marker_retry_frames = marker_retry_frames - 1
-        if mod.enabled and enable_nameplates then
+        if mod.enabled and mod.esp_enabled and enable_nameplates then
             for unit, data in pairs(unit_data_map) do
                 if HEALTH_ALIVE and HEALTH_ALIVE[unit] and not active_markers[unit] then
                     add_marker(unit)
                 end
             end
         end
-        if mod.enabled and enable_horde_esp then
+        if mod.enabled and mod.esp_enabled and enable_horde_esp then
             for unit, data in pairs(horde_unit_data) do
                 if HEALTH_ALIVE and HEALTH_ALIVE[unit] and not horde_active_markers[unit] then
                     add_horde_marker(unit)
                 end
             end
         end
-        if mod.enabled and enable_pickup_esp then
+        if mod.enabled and mod.esp_enabled and enable_pickup_esp then
             for unit in pairs(pickup_unit_data) do
                 if ALIVE and ALIVE[unit] and not pickup_active_markers[unit] then
                     add_pickup_marker(unit)
@@ -987,7 +985,7 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
             pickup_marker_requested_at[unit] = nil
         end
     end
-    if mod.enabled and enable_horde_esp then
+    if mod.enabled and mod.esp_enabled and enable_horde_esp then
         for unit in pairs(horde_unit_data) do
             if HEALTH_ALIVE[unit] and not horde_active_markers[unit] then add_horde_marker(unit) end
         end
@@ -999,12 +997,13 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
         elseif pickup_is_socketed(unit) then
             kill_pickup_marker(unit)
             pickup_unit_data[unit] = nil
-        elseif mod.enabled and enable_pickup_esp and not pickup_active_markers[unit] then
+        elseif mod.enabled and mod.esp_enabled and enable_pickup_esp
+            and not pickup_active_markers[unit] then
             add_pickup_marker(unit)
         end
     end
 
-    if not mod.enabled then return end
+    if not mod.enabled or not mod.esp_enabled then return end
 
     local player = Managers.player and Managers.player:local_player(1)
     if not player or not player.player_unit or not ALIVE[player.player_unit] then return end
@@ -1018,10 +1017,12 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
                 local dist = Vector3.length(epos - ppos)
 
                 if outline_system and enable_outlines then
-                    local has = outline_system:has_outline(unit, data.slot)
-                    if dist > outline_distance and has then
+                    local ok, has = pcall(function()
+                        return outline_system:has_outline(unit, data.slot)
+                    end)
+                    if ok and dist > outline_distance and has then
                         pcall(function() outline_system:remove_outline(unit, data.slot) end)
-                    elseif dist <= outline_distance and not has then
+                    elseif ok and dist <= outline_distance and not has then
                         pcall(function()
                             outline_system:add_outline(unit, data.slot)
                             local oc = data.outline_color
@@ -1374,6 +1375,8 @@ local function director_candidates(target_unit)
     if not ok or not target_settings then return nil, false end
 
     local cached = director_score_cache[target_unit]
+    local evaluated = cached and cached.profile == profile and survival_t < cached.expires_t
+        and cached.evaluated or false
     local candidates = cached and cached.profile == profile and survival_t < cached.expires_t
         and cached.candidates
     if not candidates then
@@ -1404,13 +1407,15 @@ local function director_candidates(target_unit)
                     )
                     if finesse_ok and value then finesse = value end
                 end
-                if modifier_ok and type(armor_modifier) == "number" and armor_modifier > 0
-                    and not shield then
-                    candidates[#candidates + 1] = {
-                        name = name,
-                        armor_modifier = armor_modifier,
-                        weakspot_modifier = finesse,
-                    }
+                if modifier_ok and type(armor_modifier) == "number" then
+                    evaluated = true
+                    if armor_modifier > 0 and not shield then
+                        candidates[#candidates + 1] = {
+                            name = name,
+                            armor_modifier = armor_modifier,
+                            weakspot_modifier = finesse,
+                        }
+                    end
                 end
             end
         end
@@ -1423,6 +1428,7 @@ local function director_candidates(target_unit)
         director_score_cache[target_unit] = {
             profile = profile,
             candidates = candidates,
+            evaluated = evaluated,
             expires_t = survival_t + 0.1,
         }
     end
@@ -1441,7 +1447,7 @@ local function director_candidates(target_unit)
             }
         end
     end
-    return positioned, #positioned > 0
+    return positioned, evaluated
 end
 
 local function target_metrics(
@@ -1652,8 +1658,12 @@ local function set_threat_marker(threat, text)
     if data then data.threat_text = enable_threat_markers and text or nil end
 end
 
-local function clear_active_threat()
+clear_active_threat = function()
     set_threat_marker(active_threat, nil)
+    if requested_defense and active_threat
+        and requested_defense.source == active_threat.source then
+        requested_defense = nil
+    end
     active_threat = nil
 end
 
@@ -1755,7 +1765,17 @@ local function nearby_enemy_geometry(player_position, radius)
     local distances, quadrants = {}, {}
     for unit in pairs(aim_target_map) do
         if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
-            local position = native_vector(Unit.world_position(unit, 1))
+            local blackboard = BLACKBOARDS and BLACKBOARDS[unit]
+            local perception = blackboard and blackboard.perception
+            local behavior = perception and perception.target_unit == local_player_unit()
+                and ScriptUnit.has_extension(unit, "behavior_system")
+            local running_action = behavior and behavior.running_action
+            local ok, action = false, nil
+            if running_action then ok, action = pcall(running_action, behavior) end
+            local melee = ok and type(action) == "string"
+                and not action:find("shoot", 1, true) and not action:find("throw", 1, true)
+                and (action:find("melee", 1, true) or action:find("attack", 1, true))
+            local position = melee and native_vector(Unit.world_position(unit, 1))
             if position then
                 local offset = position - player_position
                 local distance = Vector3.length(offset)
@@ -1783,8 +1803,8 @@ local function has_active_ranged_attack(player_unit)
             if perception and perception.target_unit == player_unit then
                 local behavior = ScriptUnit.has_extension(unit, "behavior_system")
                 local running_action = behavior and behavior.running_action
-                local ok, action = running_action
-                    and pcall(running_action, behavior)
+                local ok, action = false, nil
+                if running_action then ok, action = pcall(running_action, behavior) end
                 if ok and type(action) == "string"
                     and (action:find("shoot", 1, true) or action:find("throw", 1, true)) then
                     return true
@@ -1817,11 +1837,13 @@ local function update_resource_governor(player_unit, first_person)
     elseif heat_value > 0 then
         kind, value, target, resume_margin = "heat", heat_value, heat_target, 0.15
     else
+        if context.template then resource_history[context.template] = nil end
         return
     end
-    local history = resource_history[kind] or { value = value, increment = 0.02, suppressed = false }
-    local increase = math.max(value - history.value, 0)
-    history.increment = math.max(increase, history.increment, 0.02)
+    local history_key = context.template or kind
+    local history = resource_history[history_key]
+        or { value = value, increment = 0.02, suppressed = false }
+    history.increment = Survival.resource_increment(value, history.value, history.increment)
     local suppress, resumed = Survival.govern(
         value, target, history.increment, history.suppressed, resume_margin
     )
@@ -1831,7 +1853,7 @@ local function update_resource_governor(player_unit, first_person)
     elseif resumed then
         history.suppressed = false
     end
-    resource_history[kind] = history
+    resource_history[history_key] = history
     governor_suppress_fire = history.suppressed
 
     if enable_auto_vent and value >= target and not active_threat
@@ -1895,14 +1917,17 @@ local function update_survival(player_unit, first_person, t)
                 end
             end
         end
-        if (data.breed_name == "cultist_flamer" or data.breed_name == "renegade_flamer")
-            and network_target == player_unit
-            and HEALTH_ALIVE and HEALTH_ALIVE[unit]
-            and replicated_field(unit, "state") == 3 then
-            register_threat(
-                "flamer", unit, player_unit, "lethal", t, t + 0.25,
-                replicated_field(unit, "aim_position"), "replicated_beam"
-            )
+        if data.breed_name == "cultist_flamer" or data.breed_name == "renegade_flamer" then
+            local flamer_active = network_target == player_unit
+                and HEALTH_ALIVE and HEALTH_ALIVE[unit]
+                and replicated_field(unit, "state") == 3
+            if flamer_active and not data.flamer_active then
+                register_threat(
+                    "flamer", unit, player_unit, "lethal", t, t + 0.25,
+                    replicated_field(unit, "aim_position"), "replicated_beam"
+                )
+            end
+            data.flamer_active = flamer_active
         end
     end
 
@@ -1914,11 +1939,13 @@ local function update_survival(player_unit, first_person, t)
         active_threat.action = reaction
         active_threat.move_action = defensive_move_action(active_threat, first_person)
         set_threat_marker(active_threat, mod.get_threat_indicator())
-        local reaction_enabled = (active_threat.kind == "overhead"
+        local guard_reaction = (active_threat.kind == "overhead"
                 or active_threat.kind == "rager")
             and enable_guard_brain
-            or enable_threat_reactions
-        if t >= active_threat.reaction_t and not active_threat.reacted and reaction_enabled then
+        local reaction_owner = guard_reaction and "guard_brain" or "threat_reactions"
+        local reaction_enabled = guard_reaction or enable_threat_reactions
+        if reaction ~= "marker" and t >= active_threat.reaction_t
+            and not active_threat.reacted and reaction_enabled then
             active_threat.reacted = true
             requested_defense = {
                 action = reaction,
@@ -1926,6 +1953,7 @@ local function update_survival(player_unit, first_person, t)
                 force_t = active_threat.impact_t - 0.12,
                 until_t = active_threat.impact_t + 0.25,
                 source = active_threat.source,
+                owner = reaction_owner,
             }
             debug_survival(string.format(
                 "reaction=%s kind=%s target=%s phase=%s time_left=%.3f move=%s",
@@ -1942,7 +1970,11 @@ local function update_survival(player_unit, first_person, t)
         if Survival.should_push(
             distances, stamina and stamina.current_fraction or 0, stamina_reserve, safe_retreat
         ) then
-            requested_defense = { action = "push", until_t = t + 0.1 }
+            requested_defense = {
+                action = "push",
+                until_t = t + 0.1,
+                owner = "guard_brain",
+            }
             next_guard_push_t = t + 1
         end
     end
@@ -2019,6 +2051,7 @@ end)
 local function nearest_network_attacker(position, breed_filter)
     local player_unit = local_player_unit()
     position = position and native_vector(position)
+        or player_unit and native_vector(Unit.world_position(player_unit, 1))
     local best_unit, best_distance
     for unit, data in pairs(unit_data_map) do
         if breed_filter[data.breed_name] and replicated_target(unit) == player_unit
@@ -2034,39 +2067,11 @@ local function nearest_network_attacker(position, breed_filter)
     return best_unit
 end
 
-local MELEE_SOUND_CUES = {
-    ["wwise/events/weapon/play_minion_swing_1h_sword_elite"] = {
-        breeds = RAGER_MELEE,
-        kind = "rager",
-        impact_lead = 0.22,
-    },
-    ["wwise/events/weapon/play_minion_swing_2h_sword_elite"] = {
-        breeds = RAGER_MELEE,
-        kind = "rager",
-        impact_lead = 0.25,
-    },
-    ["wwise/events/weapon/play_minion_swing_chainaxe"] = {
-        breeds = MAULER_MELEE,
-        kind = "overhead",
-        impact_lead = 0.3,
-    },
-    ["wwise/events/weapon/play_minion_swing_2h_blunt_large_cleave"] = {
-        breeds = CRUSHER_MELEE,
-        kind = "overhead",
-        impact_lead = 0.35,
-    },
-    ["wwise/events/weapon/play_minion_swing_2h_blunt_large_sweep"] = {
-        breeds = CRUSHER_MELEE,
-        kind = "overhead",
-        impact_lead = 0.3,
-    },
-}
-
 if WwiseWorld then
     mod:hook_safe(WwiseWorld, "trigger_resource_event", function(
         wwise_world, event_name
     )
-        local cue = MELEE_SOUND_CUES[event_name]
+        local cue = Survival.MELEE_SOUND_CUES[event_name]
         if not cue then return end
         local game_session = Managers.state and Managers.state.game_session
         if game_session and game_session.is_server and game_session:is_server() then return end
@@ -2139,7 +2144,7 @@ mod:hook_safe("PlayerUnitFxExtension", "rpc_play_exclusive_player_sound", functi
     local event_name = NetworkLookup and NetworkLookup.player_character_sounds
         and NetworkLookup.player_character_sounds[event_id]
     if event_name ~= "wwise/events/player/play_backstab_indicator_melee_elite" then return end
-    local source = nearest_network_attacker(position, HIGH_RISK_MELEE)
+    local source = nearest_network_attacker(position, Survival.HIGH_RISK_MELEE)
     if source then
         register_threat(
             "overhead", source, local_player_unit(), "lethal", survival_t,

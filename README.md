@@ -24,7 +24,7 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Collision-spaced pickup cards with compact stacking, fixed screen sizing, category accents, distance fading, category presets, custom per-pickup filters, and distinct Med, Concentration, Combat, and Celerity Stimm labels
 - Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects
 - Armor and Weakspot Director ranks visible hit zones using the current weapon damage profile, live armor overrides, shields, and weakspot finesse; triggerbot skips invulnerable shots and rage mode can choose another target
-- Threat Interceptor marks committed hound, trapper, mutant, rager, sniper, flamer, grenade, and verified overhead attacks while a HUD shows the planned reaction and impact countdown
+- Threat Interceptor marks committed hound, trapper, mutant, rager, sniper, flamer, grenade, and verified overhead attacks while a HUD shows the planned reaction and reaction-window countdown
 - Native tactical HUD combines a live system/keybind panel, a camera-relative horizontal threat compass, and compact squad health, toughness, ammo, grenade, class, distance, disable, and objective states in one pooled HUD element
 - Opt-in defensive reactions use bounded safe-window timing, preserve held attacks until the final dodge window, keep the player's movement direction, and dodge committed specialist, rager, and overhead attacks
 - Opt-in Guard Brain preserves a configurable stamina reserve and pushes only when at least three nearby melee threats cover the available retreat directions
@@ -55,7 +55,7 @@ The Tactical HUD section independently controls the system panel, horizontal thr
 3. Add `BallHammer` to `mod_load_order.txt`.
 4. Restart Darktide after installing or replacing mod files.
 
-Only add `BallHammer` if you want it to be the sole optional mod in the load order. The framework's `base` and `dmf` entries do not need to be listed.
+Keep your existing optional mod entries and add `BallHammer` once. The framework's `base` and `dmf` entries do not need to be listed.
 
 ## Development checks
 

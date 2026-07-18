@@ -340,7 +340,7 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         marker.remove = true
         return
     end
-    if not mod.enabled or not mod.get_enable_horde_esp() then
+    if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_horde_esp() then
         widget.visible = false
         return
     end

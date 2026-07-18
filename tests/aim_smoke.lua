@@ -519,6 +519,9 @@ ScriptUnit = {
         if system == "locomotion_system" and units[unit].velocity then
             return { current_velocity = function() return units[unit].velocity end }
         end
+        if system == "behavior_system" and units[unit].running_action then
+            return { running_action = function() return units[unit].running_action end }
+        end
         if system == "health_system" then
             return {
                 current_health_percent = function() return units[unit].health or 1 end,
@@ -708,7 +711,8 @@ units[loose_battery] = {
     position = Vector3(1, 6, 0),
 }
 hooks["InteracteeExtension.init"](nil, nil, loose_battery)
-assert(#marker_events == 2 and marker_events[2].data.name == "Battery 01 Luggable",
+assert(#marker_events == 2 and marker_events[2].data.name == "Battery 01 Luggable"
+    and marker_events[2].data.category == "mission",
     "pickup ESP should preserve loose mission batteries")
 local stimm_names = {
     syringe_corruption_pocketable = "Med Stimm",
@@ -914,6 +918,8 @@ assert(marker_events[1] and marker_events[1].unit == training_respawn,
 HEALTH_ALIVE[training_respawn] = false
 
 mod.toggle_esp()
+assert(mod.enabled and not mod.esp_enabled,
+    "/esp should hide ESP without changing the DMF lifecycle state")
 
 local blocked_best = {}
 local visible_fallback = {}
@@ -1390,15 +1396,15 @@ held_action = "action_two_hold"
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 2.25, 22
 )
-assert(orientation.yaw < 0,
-    "aim, trigger, and rage shared targeting should fall back when the director has no usable zones")
+assert(orientation.yaw == 0,
+    "an armor evaluation with no damageable zones should not fall back to an immune bone")
 held_action = nil
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 2.26, 22
 )
 local fallback_preview, _, fallback_radius = mod.get_aim_preview()
-assert(fallback_preview == directed_target and fallback_radius,
-    "the target FOV circle should keep drawing when the director falls back to the configured bone")
+assert(fallback_preview == nil and fallback_radius == nil,
+    "the target FOV circle should not advertise an immune target")
 director_no_candidates = false
 director_profile = { name = "ballhammer_test_profile_restored", targets = { {} } }
 
@@ -2011,6 +2017,13 @@ input_handler._frame = 192
 parse_network_input(48)
 assert(network_input_cache[6][48] == true,
     "a replicated multiplayer flamer beam should network a directional dodge")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 19.8, 198
+)
+input_handler._frame = 198
+parse_network_input(59)
+assert(network_input_cache[6][59] ~= true,
+    "one sustained flamer beam must not re-arm defensive dodges")
 HEALTH_ALIVE[multiplayer_flamer] = false
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 20.0, 200
@@ -2119,13 +2132,75 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 input_handler._frame = 262
 parse_network_input(55)
 
+local unknown_elite = {}
+units[unknown_elite] = {
+    breed_data = {
+        name = "renegade_unknown_elite",
+        tags = { minion = true, elite = true },
+    },
+    position = Vector3(0, 3, 0),
+}
+HEALTH_ALIVE[unknown_elite] = true
+hooks["HealthExtension.init"](nil, nil, unknown_elite)
+hooks["BtMeleeAttackAction._start_attack_anim"](
+    {}, unknown_elite, units[unknown_elite].breed_data, player_unit, 27, {}, {
+        attack_event = "attack_01",
+        attack_timing = 27.2,
+    }, {}
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 27.11, 271
+)
+assert(mod.get_hud_status_rows()[4].state ~= "MARKER",
+    "unknown attacks should remain marker-only instead of occupying the defense queue")
+
+local removed_trapper = {}
+units[removed_trapper] = {
+    breed_data = units[trapper].breed_data,
+    position = Vector3(0, 7, 0),
+}
+HEALTH_ALIVE[removed_trapper] = true
+hooks["HealthExtension.init"](nil, nil, removed_trapper)
+hooks["BtShootNetAction._start_shooting"]({}, removed_trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 27.3, 273
+)
+assert(mod.get_hud_status_rows()[4].state == "DODGE",
+    "a committed specialist attack should occupy the defense queue")
+settings.enable_threat_reactions = false
+mod.on_setting_changed("enable_threat_reactions")
+assert(mod.get_hud_status_rows()[4].state == "READY",
+    "disabling threat reactions should cancel their queued dodge while Guard Brain stays enabled")
+settings.enable_threat_reactions = true
+mod.on_setting_changed("enable_threat_reactions")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 28, 280
+)
+hooks["BtShootNetAction._start_shooting"]({}, removed_trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 28.2, 282
+)
+assert(mod.get_hud_status_rows()[4].state == "DODGE",
+    "the replacement specialist threat should queue a dodge")
+hooks["OutlineSystem.on_remove_extension"]({}, removed_trapper, "unit_data_system")
+assert(mod.get_hud_status_rows()[4].state == "READY",
+    "removing a threat source should cancel its queued defense")
+HEALTH_ALIVE[removed_trapper] = false
+HEALTH_ALIVE[unknown_elite] = false
+
 local guard_units = { {}, {}, {} }
 local guard_positions = { Vector3(-2, 0, 0), Vector3(2, 0, 0), Vector3(0, 2, 0) }
 for i = 1, #guard_units do
     units[guard_units[i]] = {
         breed_data = { name = "renegade_melee", tags = { minion = true } },
         position = guard_positions[i],
+        running_action = "bt_shoot_action",
     }
+    BLACKBOARDS[guard_units[i]] = { perception = { target_unit = player_unit } }
     HEALTH_ALIVE[guard_units[i]] = true
     hooks["HealthExtension.init"](nil, nil, guard_units[i])
 end
@@ -2138,12 +2213,23 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 30, 300
 )
 input_handler._frame = 300
-parse_network_input(40)
-assert(network_input_cache[3][40] == true and network_input_cache[2][40] ~= true,
-    "Guard Brain should establish block before attempting a push")
+parse_network_input(60)
+assert(network_input_cache[3][60] ~= true and network_input_cache[2][60] ~= true,
+    "Guard Brain should ignore nearby enemies that are only shooting")
+for i = 1, #guard_units do units[guard_units[i]].running_action = "bt_melee_attack_action" end
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 30.1, 301
+)
 input_handler._frame = 301
-parse_network_input(41)
-assert(network_input_cache[3][41] == true and network_input_cache[2][41] == true,
+parse_network_input(61)
+assert(network_input_cache[3][61] == true and network_input_cache[2][61] ~= true,
+    "Guard Brain should establish block before attempting a push: state="
+        .. tostring(mod.get_hud_status_rows()[4].state)
+        .. " block=" .. tostring(network_input_cache[3][61])
+        .. " push=" .. tostring(network_input_cache[2][61]))
+input_handler._frame = 302
+parse_network_input(62)
+assert(network_input_cache[3][62] == true and network_input_cache[2][62] == true,
     "Guard Brain should send the push attack only after block is established")
 for i = 1, #guard_units do HEALTH_ALIVE[guard_units[i]] = false end
 settings.enable_resource_governor = true
@@ -2176,6 +2262,18 @@ local no_target_ok, no_target_error = pcall(
     first_person_extension, player_unit, 0.1, 1.7, 17
 )
 assert(no_target_ok, "holding aim without a valid target should be a no-op: " .. tostring(no_target_error))
+
+if not mod.esp_enabled then mod.toggle_esp() end
+current_outline_system = setmetatable({}, {
+    __index = function() error("destroyed outline system") end,
+})
+outline_watchdog_ok, outline_watchdog_error = pcall(function()
+    for frame = 1, 60 do
+        hooks["HudElementWorldMarkers.update"]({}, 0.016, 40 + frame * 0.016)
+    end
+end)
+assert(outline_watchdog_ok,
+    "outline watchdog should survive system teardown: " .. tostring(outline_watchdog_error))
 
 local lifecycle_unit = {}
 units[lifecycle_unit] = {

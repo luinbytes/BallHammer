@@ -119,11 +119,13 @@ local widgets = {
         {
             pass_type = "rect",
             visibility_function = visible,
+            style_id = "background",
             style = rect({ 150, 8, 10, 12 }, { 0, 0, 1 }, { 108, 20 }),
         },
         {
             pass_type = "rect",
             visibility_function = visible,
+            style_id = "accent",
             style = rect({ 255, 255, 90, 90 }, { -53, 0, 2 }, { 2, 20 }),
         },
         {
@@ -131,6 +133,7 @@ local widgets = {
             value_id = "text",
             value = "",
             visibility_function = visible,
+            style_id = "text",
             style = text_style(13, "center", { 255, 255, 225, 225 }, { 0, 0, 3 }),
         },
     }, "threat"),
@@ -361,14 +364,38 @@ function BallHammerThreatHud:_apply_opacity(opacity)
     if opacity == self._last_opacity then return end
     self._last_opacity = opacity
     local alpha = math.max(0.2, math.min(1, opacity / 100))
-    self._widgets_by_name.compass.style.background.color[1] = math.floor(150 * alpha)
-    self._widgets_by_name.status_header.style.background.color[1] = math.floor(190 * alpha)
-    self._widgets_by_name.player_header.style.background.color[1] = math.floor(190 * alpha)
+    self._opacity_alpha = alpha
+    local threat = self._widgets_by_name.threat.style
+    threat.background.color[1] = math.floor(150 * alpha)
+    threat.accent.color[1] = math.floor(255 * alpha)
+    threat.text.text_color[1] = math.floor(255 * alpha)
+    local compass = self._widgets_by_name.compass.style
+    compass.background.color[1] = math.floor(150 * alpha)
+    compass.line.color[1] = math.floor(180 * alpha)
+    compass.center.color[1] = math.floor(255 * alpha)
+    compass.label.text_color[1] = math.floor(210 * alpha)
+    for _, name in ipairs({ "status_header", "player_header" }) do
+        local style = self._widgets_by_name[name].style
+        style.background.color[1] = math.floor(190 * alpha)
+        style.accent.color[1] = math.floor(255 * alpha)
+        style.text.text_color[1] = math.floor(255 * alpha)
+    end
     for i = 1, 5 do
-        self._widgets_by_name["status_" .. i].style.background.color[1] = math.floor(150 * alpha)
+        local style = self._widgets_by_name["status_" .. i].style
+        style.background.color[1] = math.floor(150 * alpha)
+        style.accent.color[1] = math.floor(255 * alpha)
+        style.label.text_color[1] = math.floor(255 * alpha)
+        style.key.text_color[1] = math.floor(255 * alpha)
+        style.state.text_color[1] = math.floor(255 * alpha)
     end
     for i = 1, MAX_PLAYERS do
-        self._widgets_by_name["player_" .. i].style.background.color[1] = math.floor(155 * alpha)
+        local style = self._widgets_by_name["player_" .. i].style
+        style.background.color[1] = math.floor(155 * alpha)
+        style.accent.color[1] = math.floor(255 * alpha)
+        style.name.text_color[1] = math.floor(255 * alpha)
+        style.class.text_color[1] = math.floor(220 * alpha)
+        style.stats.text_color[1] = math.floor(235 * alpha)
+        style.state.text_color[1] = math.floor(255 * alpha)
     end
 end
 
@@ -384,8 +411,8 @@ function BallHammerThreatHud:_refresh_status(visible_status)
         widget.content.key = row.key
         widget.content.state = row.state
         local color = TONE_COLORS[row.tone] or TONE_COLORS.idle
-        set_color(widget.style.accent.color, color, 1)
-        set_color(widget.style.state.text_color, color, 1)
+        set_color(widget.style.accent.color, color, self._opacity_alpha or 1)
+        set_color(widget.style.state.text_color, color, self._opacity_alpha or 1)
     end
 end
 
@@ -403,7 +430,7 @@ function BallHammerThreatHud:_refresh_threats(range)
     local active_found = false
     if camera_position then
         for unit, data in pairs(threat_map) do
-            local position = unit_position(unit)
+            local position = HEALTH_ALIVE and HEALTH_ALIVE[unit] and unit_position(unit)
             if position then
                 local distance = Vector3.length(position - camera_position)
                 if distance <= range then
@@ -428,9 +455,11 @@ function BallHammerThreatHud:_refresh_threats(range)
             end
         end
         if active_threat and not active_found then
-            local position = unit_position(active_threat.source)
+            local source = active_threat.source
+            local position = source and HEALTH_ALIVE and HEALTH_ALIVE[source]
+                and unit_position(source)
             local boxed_position = active_threat.danger_position
-            if not position and boxed_position then
+            if not source and boxed_position then
                 local ok, value = pcall(function() return boxed_position:unbox() end)
                 if ok then position = value end
             end
@@ -463,10 +492,6 @@ function BallHammerThreatHud:_refresh_threats(range)
     local selected_count = math.min(count, MAX_THREATS)
     for i = 1, selected_count do selected[i] = candidates[i] end
     for i = selected_count + 1, #selected do selected[i] = nil end
-end
-
-local function bearing_sort(a, b)
-    return a.x < b.x
 end
 
 function BallHammerThreatHud:_update_compass(visible_compass)
@@ -514,35 +539,39 @@ function BallHammerThreatHud:_update_compass(visible_compass)
         end
     end
     for i = count + 1, #display do display[i] = nil end
-    table.sort(display, bearing_sort)
 
     local lane_x = self._lane_x
     lane_x[1], lane_x[2], lane_x[3] = -math.huge, -math.huge, -math.huge
     for i = 1, count do
         local item = display[i]
         local candidate = item.candidate
-        local lane = 1
-        while lane < 3 and item.x - lane_x[lane] < 90 do lane = lane + 1 end
-        lane_x[lane] = item.x
         local widget = self._widgets_by_name["compass_threat_" .. i]
-        local data = candidate.data
-        local arrow = item.height > 2 and "^" or item.height < -2 and "v" or ""
-        if widget.content.base_label ~= candidate.label or widget.content.arrow ~= arrow then
-            widget.content.base_label = candidate.label
-            widget.content.arrow = arrow
-            widget.content.text = candidate.label .. arrow
+        local lane = 1
+        while lane <= 3 and math.abs(item.x - lane_x[lane]) < 100 do lane = lane + 1 end
+        if lane > 3 then
+            widget.content.visible = false
+        else
+            lane_x[lane] = item.x
+            local data = candidate.data
+            local arrow = item.height > 2 and "^" or item.height < -2 and "v" or ""
+            if widget.content.base_label ~= candidate.label or widget.content.arrow ~= arrow then
+                widget.content.base_label = candidate.label
+                widget.content.arrow = arrow
+                widget.content.text = candidate.label .. arrow
+            end
+            widget.content.visible = true
+            widget.offset[1] = item.x
+            widget.offset[2] = (lane - 2) * 18
+            local source = candidate.active and TONE_COLORS.danger
+                or data.flag == "BOSS" and BOSS_COLOR
+                or TONE_COLORS.active
+            local center_fade = math.abs(item.x) < COMPASS_HALF * 0.25 and 0.72 or 1
+            local edge_fade = 1 - math.max(0, math.abs(item.x) / COMPASS_HALF - 0.8) * 2.5
+            local alpha = math.max(0.35, center_fade * edge_fade)
+                * (self._opacity_alpha or 1)
+            set_color(widget.style.pip.color, source, alpha)
+            set_color(widget.style.text.text_color, source, alpha)
         end
-        widget.content.visible = true
-        widget.offset[1] = item.x
-        widget.offset[2] = (lane - 2) * 15
-        local source = candidate.active and TONE_COLORS.danger
-            or data.flag == "BOSS" and BOSS_COLOR
-            or TONE_COLORS.active
-        local center_fade = math.abs(item.x) < COMPASS_HALF * 0.25 and 0.72 or 1
-        local edge_fade = 1 - math.max(0, math.abs(item.x) / COMPASS_HALF - 0.8) * 2.5
-        local alpha = math.max(0.35, center_fade * edge_fade)
-        set_color(widget.style.pip.color, source, alpha)
-        set_color(widget.style.text.text_color, source, alpha)
     end
     for i = count + 1, MAX_THREATS do
         self._widgets_by_name["compass_threat_" .. i].content.visible = false
@@ -644,8 +673,8 @@ function BallHammerThreatHud:_refresh_players(visible_players)
             and (state == "READY" and "YOU" or state)
             or string.format("%s  %dm", state, math.floor(distance + 0.5))
         local color = TONE_COLORS[tone] or TONE_COLORS.ready
-        set_color(widget.style.accent.color, color, 1)
-        set_color(widget.style.state.text_color, color, 1)
+        set_color(widget.style.accent.color, color, self._opacity_alpha or 1)
+        set_color(widget.style.state.text_color, color, self._opacity_alpha or 1)
     end
     for i = shown + 1, MAX_PLAYERS do
         self._widgets_by_name["player_" .. i].content.visible = false

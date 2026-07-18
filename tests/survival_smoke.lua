@@ -4,6 +4,11 @@ local function eq(actual, expected, message)
     assert(actual == expected, message .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
 end
 
+local function close(actual, expected, message)
+    assert(math.abs(actual - expected) < 0.000001,
+        message .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual))
+end
+
 eq(Survival.safe_timing(10, 11, 0), 10, "early timing should use the start of the safe window")
 eq(Survival.safe_timing(10, 11, 100), 11, "late timing should stay inside the safe window")
 eq(Survival.safe_timing(11, 10, 50), nil, "invalid timing windows should fail closed")
@@ -56,5 +61,12 @@ eq(resume, false, "an unsafe resource level should not resume")
 suppress, resume = Survival.govern(0.79, 0.9, 0.04, true, 0.1)
 eq(suppress, false, "a cooled resource should stop suppression")
 eq(resume, true, "peril should resume ten points below its target")
+
+close(Survival.resource_increment(0.36, 0.35, 0.1), 0.09,
+    "learned resource cost should decay after a cheaper update")
+close(Survival.resource_increment(0.55, 0.35, 0.09), 0.2,
+    "a larger observed resource cost should replace the estimate")
+close(Survival.resource_increment(0.55, 0.55, 0.2), 0.2,
+    "idle frames should preserve the last observed resource cost")
 
 print("BallHammer survival smoke: ok")

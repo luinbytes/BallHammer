@@ -1,5 +1,6 @@
 local threat_text = "DODGE 0.2"
 local show_status, show_compass, show_players = true, true, true
+local hud_opacity = 80
 local threat_unit = {}
 local player_unit = {}
 local positions = {
@@ -29,7 +30,7 @@ local mod = {
         return threat_data, active_threat
     end,
     get_hud_settings = function()
-        return show_status, show_compass, 80, show_players, 80
+        return show_status, show_compass, 80, show_players, hud_opacity
     end,
 }
 
@@ -87,6 +88,7 @@ Quaternion = { forward = function() return vector(0, 1, 0) end }
 Camera = { local_rotation = function() return {} end }
 Unit = { world_position = function(unit) return positions[unit] end }
 ALIVE = { [threat_unit] = true, [player_unit] = true }
+HEALTH_ALIVE = { [threat_unit] = true, [player_unit] = true }
 math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 
 local health = { current_health_percent = function() return 0.75 end }
@@ -176,24 +178,60 @@ assert(element._widgets_by_name.player_header.content.visible
     and element._widgets_by_name.player_1.content.stats:find("HP 75", 1, true)
     and element._widgets_by_name.player_1.content.stats:find("AMMO 50%%"),
     "squad list should render native health, toughness, ammo, and grenade data")
+assert(element._widgets_by_name.status_1.style.label.text_color[1] == 204
+    and element._widgets_by_name.status_1.style.accent.color[1] == 204
+    and element._widgets_by_name.compass.style.line.color[1] == 144
+    and element._widgets_by_name.player_1.style.stats.text_color[1] == 188,
+    "shared HUD opacity should apply to text, accents, and compass surfaces")
+
+local crowded_units = { {}, {}, {} }
+for i = 1, #crowded_units do
+    local unit = crowded_units[i]
+    positions[unit] = vector(10, 10, 3)
+    ALIVE[unit], HEALTH_ALIVE[unit] = true, true
+    threat_data[unit] = {
+        name = "Rager " .. i,
+        flag = "SPECIAL",
+        companion_danger = 0.8,
+    }
+end
+element:update(0.016, 1.2, nil, {}, nil)
+assert(element._widgets_by_name.compass_threat_1.content.visible
+    and element._widgets_by_name.compass_threat_2.content.visible
+    and element._widgets_by_name.compass_threat_3.content.visible
+    and not element._widgets_by_name.compass_threat_4.content.visible
+    and element._widgets_by_name.compass_threat_1.content.text:find("Mutant", 1, true)
+    and math.abs(element._widgets_by_name.compass_threat_1.offset[2]
+        - element._widgets_by_name.compass_threat_2.offset[2]) >= 18,
+    "compass overflow should keep the active threat in three non-overlapping lanes")
+for i = 1, #crowded_units do
+    threat_data[crowded_units[i]] = nil
+    HEALTH_ALIVE[crowded_units[i]] = false
+end
 
 positions[threat_unit] = vector(-10, 10, 3)
-element:update(0.016, 1.02, nil, {}, nil)
+element:update(0.016, 1.32, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.offset[1] < 0,
     "bearing should follow camera-relative movement every frame between scans")
+
+HEALTH_ALIVE[threat_unit] = false
+active_threat.danger_position = { unbox = function() return vector(-10, 10, 3) end }
+element:update(0.016, 1.44, nil, {}, nil)
+assert(not element._widgets_by_name.compass_threat_1.content.visible,
+    "dead enemies should leave the threat compass before their unit despawns")
 
 threat_data[threat_unit] = nil
 active_threat = {
     kind = "grenade",
     danger_position = { unbox = function() return vector(8, 6, 0) end },
 }
-element:update(0.016, 1.2, nil, {}, nil)
+element:update(0.016, 1.56, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.content.text:find("GRENADE", 1, true),
     "committed position-only threats should remain visible on the compass")
 
 threat_text = nil
 show_status, show_compass, show_players = false, false, false
-element:update(0.016, 1.3, nil, {}, nil)
+element:update(0.016, 1.7, nil, {}, nil)
 assert(not element._widgets_by_name.threat.content.visible
     and not element._widgets_by_name.status_header.content.visible
     and not element._widgets_by_name.compass.content.visible
