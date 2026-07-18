@@ -207,6 +207,7 @@ local requested_vent = nil
 local survival_t = 0
 local survival_warning = {}
 local threat_seen_at = setmetatable({}, { __mode = "k" })
+mod._fallback_dodge_suppressed_until = setmetatable({}, { __mode = "k" })
 local resource_history = {}
 local director_score_cache = setmetatable({}, { __mode = "k" })
 local governor_suppress_fire = false
@@ -238,10 +239,15 @@ mod.get_aim_marker_style  = function()
     return show_aim_fov, aim_fov_opacity, aim_fov_red, aim_fov_green, aim_fov_blue
 end
 mod.get_threat_indicator = function()
-    if not enable_threat_markers or not active_threat then return nil end
+    if not enable_threat_markers or not active_threat or active_threat.display_done then return nil end
     local action = active_threat.action or active_threat.kind
-    local remaining = math.max(active_threat.impact_t - survival_t, 0)
-    return string.format("%s %.1f", string.upper(action), remaining)
+    local label = string.upper(action)
+    if action == "dodge" then
+        label = label .. (active_threat.move_action == "move_right" and " RIGHT" or " LEFT")
+    end
+    local remaining = math.max((active_threat.reaction_t or survival_t) - survival_t, 0)
+    return remaining > 0 and string.format("%s %.1f", label, remaining)
+        or label .. " NOW"
 end
 local hud_status_rows = {
     { label = "AIM" },
@@ -1659,6 +1665,11 @@ local function register_threat(
     if not source or target ~= player_unit then return end
     commit_t = commit_t or survival_t
     impact_t = math.max(impact_t or commit_t, commit_t)
+    -- ponytail: audio fallbacks have no attack id; group one cue burst after a real dodge.
+    if phase == "melee_audio_cue"
+        and commit_t < (mod._fallback_dodge_suppressed_until[source] or 0) then
+        return
+    end
     if active_threat and commit_t > active_threat.impact_t + 0.05 then clear_active_threat() end
     local previous_t = threat_seen_at[source]
     if previous_t and commit_t - previous_t < 0.2 then return end
@@ -1901,9 +1912,8 @@ local function update_survival(player_unit, first_person, t)
         active_threat.time_left = remaining
         local reaction = Survival.reaction(active_threat)
         active_threat.action = reaction
-        set_threat_marker(active_threat, string.format(
-            "%s %.1f", string.upper(reaction), remaining
-        ))
+        active_threat.move_action = defensive_move_action(active_threat, first_person)
+        set_threat_marker(active_threat, mod.get_threat_indicator())
         local reaction_enabled = (active_threat.kind == "overhead"
                 or active_threat.kind == "rager")
             and enable_guard_brain
@@ -1912,7 +1922,7 @@ local function update_survival(player_unit, first_person, t)
             active_threat.reacted = true
             requested_defense = {
                 action = reaction,
-                move_action = defensive_move_action(active_threat, first_person),
+                move_action = active_threat.move_action,
                 force_t = active_threat.impact_t - 0.12,
                 until_t = active_threat.impact_t + 0.25,
                 source = active_threat.source,
@@ -2204,6 +2214,13 @@ local function apply_survival_input(lookup, input_cache, index, t)
                 set_cached_input(lookup, input_cache, index, "dodge", true)
                 if not physical_move then
                     set_cached_input(lookup, input_cache, index, request.move_action or "move_left", 1)
+                end
+                if request.source then
+                    mod._fallback_dodge_suppressed_until[request.source] = (t or survival_t) + 0.7
+                    if active_threat and active_threat.source == request.source then
+                        active_threat.display_done = true
+                        set_threat_marker(active_threat, nil)
+                    end
                 end
                 requested_defense = nil
             elseif request.action == "push" then
@@ -2523,6 +2540,7 @@ local function teardown_runtime(for_reload)
     clear_active_threat()
     table.clear(companion_attackers)
     table.clear(semi_auto_pressed_action_t)
+    table.clear(mod._fallback_dodge_suppressed_until)
     table.clear(resource_history)
 
     for unit, data in pairs(unit_data_map) do

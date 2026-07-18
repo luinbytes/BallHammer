@@ -1889,11 +1889,30 @@ hooks["WwiseWorld.trigger_resource_event"](
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 14.6, 146
 )
+threat_indicator_value = mod.get_threat_indicator()
+assert(string.match(threat_indicator_value or "", "^DODGE %u+ NOW$"),
+    "the threat indicator must show the planned dodge direction and action moment: "
+        .. tostring(threat_indicator_value))
 input_handler._frame = 146
 parse_network_input(43)
 assert(network_input_cache[6][43] == true
     and (network_input_cache[7][43] == 1 or network_input_cache[8][43] == 1),
     "a multiplayer rager swing cue should trigger a lateral dodge")
+assert(mod.get_threat_indicator() == nil,
+    "the threat indicator must clear after its dodge input is issued")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.85, 148
+)
+hooks["WwiseWorld.trigger_resource_event"](
+    {}, "wwise/events/weapon/play_minion_swing_1h_sword_elite"
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.9, 149
+)
+input_handler._frame = 149
+parse_network_input(58)
+assert(network_input_cache[6][58] ~= true,
+    "one rager attack burst must not schedule a second dodge from repeated audio cues")
 hooks["BtMeleeAttackAction._start_attack_anim"](
     {}, multiplayer_rager, units[multiplayer_rager].breed_data, player_unit, 15.1, {}, {
         attack_event = "attack_combo",
@@ -1904,6 +1923,8 @@ hooks["BtMeleeAttackAction._start_attack_anim"](
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 15.2, 152
 )
+assert(string.match(mod.get_threat_indicator() or "", "^DODGE %u+ 0%.1$"),
+    "authoritative attacks must count down to Darktide's dodge window")
 input_handler._frame = 152
 parse_network_input(56)
 assert(network_input_cache[6][56] ~= true,
@@ -1915,6 +1936,8 @@ input_handler._frame = 154
 parse_network_input(57)
 assert(network_input_cache[6][57] == true,
     "an authoritative melee attack should dodge inside Darktide's own window")
+assert(mod.get_threat_indicator() == nil,
+    "an authoritative threat indicator must clear after its dodge input")
 HEALTH_ALIVE[multiplayer_rager] = false
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 16.5, 165
