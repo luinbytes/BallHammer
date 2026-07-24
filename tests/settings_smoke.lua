@@ -47,6 +47,35 @@ assert(pickup_filter.sub_widgets[1].setting_id == "pickup_show_plasteel"
     and pickup_filter.sub_widgets[13].setting_id == "pickup_show_other",
     "custom pickup filtering should expose individual pickup types")
 
+local function find_widget(children, setting_id)
+    for _, child in ipairs(children or {}) do
+        if child.setting_id == setting_id then return child end
+        local nested = find_widget(child.sub_widgets, setting_id)
+        if nested then return nested end
+    end
+end
+
+local function assert_controller_selector(group, setting_id, trigger_suffix)
+    local selector = find_widget(group.sub_widgets, setting_id)
+    assert(selector and selector.type == "dropdown" and selector.default_value == "off",
+        setting_id .. " should be an opt-in dropdown")
+    assert(selector.options and selector.options[1] and selector.options[1].value == "off"
+        and #selector.options > 1,
+        setting_id .. " should offer off plus controller actions")
+    for index = 2, #selector.options do
+        local value = selector.options[index].value
+        assert(type(value) == "string" and value:match("^[a-z][a-z0-9_]*_" .. trigger_suffix .. "$"),
+            setting_id .. " should store Darktide Ingame action aliases, not raw device buttons")
+    end
+end
+
+assert_controller_selector(widgets[1], "esp_controller_activation", "pressed")
+assert_controller_selector(widgets[3], "aim_controller_activation", "hold")
+assert_controller_selector(widgets[4], "trigger_controller_activation", "hold")
+assert_controller_selector(widgets[5], "rage_controller_activation", "hold")
+assert(find_widget(widgets[1].sub_widgets, "toggle_key").function_name == "toggle_esp",
+    "ESP should retain its custom keyboard keybind")
+
 local activation = widgets[3].sub_widgets[1]
 assert(activation.setting_id == "aim_activation" and activation.default_value == "left_mouse",
     "left mouse should be the default native aim activation")

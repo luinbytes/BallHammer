@@ -99,6 +99,7 @@ local settings = {
     pickup_distance = 80,
     max_distance = 80,
     outline_distance = 30,
+    esp_controller_activation = "off",
     enable_aimbot = true,
     aim_distance = 80,
     aim_fov = 30,
@@ -106,17 +107,20 @@ local settings = {
     aim_curve = 20,
     aim_location = "head",
     aim_activation = "left_mouse",
+    aim_controller_activation = "off",
     show_aim_fov = true,
     aim_fov_opacity = 60,
     aim_fov_red = 255,
     aim_fov_green = 158,
     aim_fov_blue = 181,
     trigger_activation = "off",
+    trigger_controller_activation = "off",
     trigger_fov = 5,
     trigger_fire_fov = 0.8,
     trigger_smoothness = 35,
     rage_distance = 120,
     rage_smoothness = 10,
+    rage_controller_activation = "off",
     enable_auto_fire = true,
     enable_no_recoil = false,
     enable_no_spread = false,
@@ -330,6 +334,7 @@ local warp_percentage = 0
 local heat_percentage = 0
 local current_outline_system = nil
 local live_world_markers = { _marker_templates = {} }
+gamepad_active = false
 test_game_session = {}
 replicated_fields = setmetatable({}, { __mode = "k" })
 unit_ids = setmetatable({}, { __mode = "k" })
@@ -372,6 +377,10 @@ Managers = {
     },
     player = { local_player = function() return player end },
     input = {
+        device_in_use = function(_, device)
+            assert(device == "gamepad")
+            return gamepad_active
+        end,
         _find_active_device = function(_, device)
             assert(device == "mouse")
             return {
@@ -1169,6 +1178,73 @@ settings.aim_activation = "left_mouse"
 mod.on_setting_changed("aim_activation")
 held_action = nil
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 1.05, 10)
+
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "action_one_hold"
+gamepad_active = true
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.055, 10
+)
+assert(orientation.yaw == 0 and orientation.pitch == 0,
+    "gamepad primary must not activate the default left-mouse path when its selector is off")
+settings.aim_controller_activation = "action_one_hold"
+mod.on_setting_changed("aim_controller_activation")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.06, 10
+)
+assert(orientation.yaw < 0,
+    "gamepad primary should activate aim after it is explicitly selected")
+settings.aim_controller_activation = "off"
+mod.on_setting_changed("aim_controller_activation")
+gamepad_active = false
+held_action = nil
+
+settings.aim_activation = "off"
+settings.trigger_activation = "off"
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+camera_rotation = Vector3.normalize(Vector3(4, 20, 0))
+local controller_activation_ids = {
+    "aim_controller_activation",
+    "trigger_controller_activation",
+    "rage_controller_activation",
+}
+for index, setting_id in ipairs(controller_activation_ids) do
+    settings[setting_id] = "weapon_extra_hold"
+    mod.on_setting_changed(setting_id)
+    orientation.yaw, orientation.pitch = 0, 0
+    held_action = "weapon_extra_hold"
+    gamepad_active = false
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 1.05 + index * 0.02, 10
+    )
+    assert(orientation.yaw == 0 and orientation.pitch == 0,
+        setting_id .. " must ignore its controller action while keyboard/mouse is active")
+    gamepad_active = true
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 1.055 + index * 0.02, 10
+    )
+    assert(orientation.yaw < 0,
+        setting_id .. " should activate from a held Darktide Ingame action when gamepad is active")
+    held_action = nil
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 1.06 + index * 0.02, 10
+    )
+    settings[setting_id] = "off"
+    mod.on_setting_changed(setting_id)
+end
+gamepad_active = false
+
+orientation.yaw, orientation.pitch = 0, 0
+held_action = "weapon_extra_hold"
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.13, 10
+)
+assert(orientation.yaw == 0 and orientation.pitch == 0,
+    "controller activation should remain disabled until a controller action is selected")
+
+settings.aim_activation = "left_mouse"
+mod.on_setting_changed("aim_activation")
 held_action = "action_one_hold"
 shot_ready = true
 assert(not parsed_fire_pressed,
@@ -1192,17 +1268,53 @@ local input_handler = {
         move_backward = 11,
         weapon_reload_hold = 12,
         weapon_extra_hold = 13,
+        weapon_extra_pressed = 14,
     },
     _frame = 11,
     _player = player,
 }
-local network_input_cache = { {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} }
+local network_input_cache = { {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {} }
 local function parse_network_input(index)
     HumanInputHandler._parse_input(input_handler, network_input_cache, input_service, index)
     input_handler._frame = input_handler._frame + 1
     return network_input_cache[2][index], network_input_cache[4][index],
         network_input_cache[5][index], network_input_cache[1][index]
 end
+
+input_values.action_one_hold = false
+input_values.weapon_extra_pressed = true
+local esp_enabled_before_controller_press = mod.enabled
+parse_network_input(0.1)
+assert(mod.enabled == esp_enabled_before_controller_press,
+    "ESP controller action must not toggle while its selector is off")
+input_values.weapon_extra_pressed = false
+parse_network_input(0.2)
+settings.esp_controller_activation = "weapon_extra_pressed"
+mod.on_setting_changed("esp_controller_activation")
+input_values.weapon_extra_pressed = true
+parse_network_input(0.3)
+assert(mod.enabled == esp_enabled_before_controller_press,
+    "ESP controller action must not toggle while keyboard/mouse is active")
+input_values.weapon_extra_pressed = false
+parse_network_input(0.4)
+gamepad_active = true
+input_values.weapon_extra_pressed = true
+parse_network_input(0.5)
+assert(mod.enabled ~= esp_enabled_before_controller_press,
+    "ESP selector should toggle on its configured action when gamepad is active")
+input_values.weapon_extra_pressed = false
+parse_network_input(0.6)
+input_values.weapon_extra_pressed = true
+parse_network_input(0.7)
+assert(mod.enabled == esp_enabled_before_controller_press,
+    "a later configured pressed action should toggle ESP back")
+input_values.weapon_extra_pressed = false
+parse_network_input(0.8)
+settings.esp_controller_activation = "off"
+mod.on_setting_changed("esp_controller_activation")
+gamepad_active = false
+input_values.action_one_hold = true
+
 assert(parse_network_input(1),
     "semi-automatic fire must add its press to Darktide's networked input frame")
 assert(not parse_network_input(2),

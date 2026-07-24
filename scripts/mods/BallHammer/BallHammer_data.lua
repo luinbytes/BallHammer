@@ -1,5 +1,18 @@
 local mod = get_mod("BallHammer")
 
+local function controller_action_options(trigger)
+    return {
+        { text = "controller_activation_off", value = "off" },
+        { text = "controller_action_primary", value = "action_one_" .. trigger },
+        { text = "controller_action_secondary", value = "action_two_" .. trigger },
+        { text = "controller_action_weapon_special", value = "weapon_extra_" .. trigger },
+        { text = "controller_action_reload", value = "weapon_reload_" .. trigger },
+        { text = "controller_action_interact", value = "interact_" .. trigger },
+        { text = "controller_action_combat_ability", value = "combat_ability_" .. trigger },
+        { text = "controller_action_grenade_ability", value = "grenade_ability_" .. trigger },
+    }
+end
+
 return {
     name = mod:localize("mod_name"),
     description = mod:localize("mod_description"),
@@ -53,6 +66,12 @@ return {
                         keybind_type = "function_call",
                         default_value = {},
                         function_name = "toggle_esp",
+                    },
+                    {
+                        setting_id = "esp_controller_activation",
+                        type = "dropdown",
+                        default_value = "off",
+                        options = controller_action_options("pressed"),
                     },
                 },
             },
@@ -201,6 +220,12 @@ return {
                         range = { 0, 100 },
                         decimals_number = 0,
                     },
+                    {
+                        setting_id = "aim_controller_activation",
+                        type = "dropdown",
+                        default_value = "off",
+                        options = controller_action_options("hold"),
+                    },
                 },
             },
             {
@@ -250,6 +275,12 @@ return {
                         range = { 0, 100 },
                         decimals_number = 0,
                     },
+                    {
+                        setting_id = "trigger_controller_activation",
+                        type = "dropdown",
+                        default_value = "off",
+                        options = controller_action_options("hold"),
+                    },
                 },
             },
             {
@@ -277,6 +308,12 @@ return {
                         default_value = 10,
                         range = { 0, 100 },
                         decimals_number = 0,
+                    },
+                    {
+                        setting_id = "rage_controller_activation",
+                        type = "dropdown",
+                        default_value = "off",
+                        options = controller_action_options("hold"),
                     },
                 },
             },

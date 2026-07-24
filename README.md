@@ -15,7 +15,7 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Normal aimbot and triggerbot keep an in-FOV target locked, then replace it when it leaves the FOV, dies, or becomes occluded
 - Head or torso aim, configurable distance and field of view, interpolated smoothing, and aim curvature
 - Distance-scaled target preview follows the armor-aware or configured aim bone nearest the crosshair and becomes the activation target
-- Left mouse, right mouse, either mouse button, or a custom keyboard activation key
+- Left mouse, right mouse, either mouse button, a custom keyboard/mouse keybind, or a rebound controller action alias
 - Configurable magnet triggerbot with aim radius, fire radius, and smoothing
 - Rage mode that selects visible on-screen targets using danger, range, and crosshair weighting
 - Melee-aware aim range limits mouse-one targeting to enemies inside the current weapon sweep reach
@@ -35,6 +35,8 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 Open Darktide's **Mod Options**, then select **BallHammer**. The menu contains separate **ESP**, **Pickup ESP**, **Aimbot**, **Magnet Triggerbot**, **Rage Mode**, **Armor and Weakspot Director**, **Threat Interceptor**, **Guard Brain**, **Warp and Heat Governor**, **Weapon**, and **Companion** sections.
 
 ESP can also be toggled by entering `/esp` in the in-game chat or by assigning **Toggle ESP Keybind**. Aimbot and triggerbot retain a target only while it stays inside their FOV; rage mode retains any visible on-screen target. Releasing the activation clears the lock.
+
+Controller support is opt-in and only responds while Darktide reports the gamepad as the active input device. Choose **Controller ESP Toggle Action** for a pressed action, or the corresponding **Controller … Hold Action** selector for aimbot, triggerbot, and rage. These selectors use Darktide's Ingame action aliases, so they follow the active controller layout and player rebindings; the selected action still performs its normal game function. While the gamepad is active, aim, triggerbot, and rage use only their explicitly selected controller action; **Off** disables activation for that feature. The existing DMF keybind fields remain available unchanged while keyboard and mouse are active.
 
 Pickup ESP defaults to all pickups and can show only supplies, stimms, crafting materials, mission items, or a custom per-item selection.
 

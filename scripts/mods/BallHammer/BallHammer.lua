@@ -145,6 +145,7 @@ local PICKUP_FILTER_IDS = {
 local pickup_custom = {}
 for i = 1, #PICKUP_FILTER_IDS do pickup_custom[PICKUP_FILTER_IDS[i]] = true end
 local outline_distance  = 30
+local esp_controller_activation = "off"
 local aimbot_held       = false
 local aim_distance      = 80
 local aim_fov           = 30
@@ -152,6 +153,7 @@ local aim_smoothness    = 55
 local aim_curve         = 20
 local aim_location      = "head"
 local aim_activation    = "left_mouse"
+local aim_controller_activation = "off"
 local show_aim_fov      = true
 local aim_fov_opacity   = 60
 local aim_fov_red       = 255
@@ -160,11 +162,13 @@ local aim_fov_blue      = 181
 local triggerbot_held   = false
 local rage_held         = false
 local trigger_activation = "off"
+local trigger_controller_activation = "off"
 local trigger_fov        = 5
 local trigger_fire_fov   = 0.8
 local trigger_smoothness = 35
 local rage_distance      = 120
 local rage_smoothness    = 10
+local rage_controller_activation = "off"
 local enable_auto_fire  = true
 local enable_no_recoil  = false
 local enable_no_spread  = false
@@ -273,23 +277,27 @@ local function refresh_settings()
         pickup_custom[id] = mod:get("pickup_show_" .. id) ~= false
     end
     outline_distance  = mod:get("outline_distance")
+    esp_controller_activation = mod:get("esp_controller_activation") or "off"
     aim_distance      = mod:get("aim_distance")
     aim_fov           = mod:get("aim_fov")
     aim_smoothness    = mod:get("aim_smoothness")
     aim_curve         = mod:get("aim_curve")
     aim_location      = mod:get("aim_location")
     aim_activation    = mod:get("aim_activation")
+    aim_controller_activation = mod:get("aim_controller_activation") or "off"
     show_aim_fov      = mod:get("show_aim_fov")
     aim_fov_opacity   = mod:get("aim_fov_opacity")
     aim_fov_red       = mod:get("aim_fov_red")
     aim_fov_green     = mod:get("aim_fov_green")
     aim_fov_blue      = mod:get("aim_fov_blue")
     trigger_activation = mod:get("trigger_activation")
+    trigger_controller_activation = mod:get("trigger_controller_activation") or "off"
     trigger_fov        = mod:get("trigger_fov")
     trigger_fire_fov   = mod:get("trigger_fire_fov")
     trigger_smoothness = mod:get("trigger_smoothness")
     rage_distance      = mod:get("rage_distance")
     rage_smoothness    = mod:get("rage_smoothness")
+    rage_controller_activation = mod:get("rage_controller_activation") or "off"
     enable_auto_fire  = mod:get("enable_auto_fire")
     enable_no_recoil  = mod:get("enable_no_recoil")
     enable_no_spread  = mod:get("enable_no_spread")
@@ -311,7 +319,19 @@ local function refresh_settings()
     refresh_marker_aim_node()
 end
 
-local function activation_is_held(activation, custom_held, input_extension)
+local function controller_input_active()
+    local input_manager = Managers and Managers.input
+    local device_in_use = input_manager and input_manager.device_in_use
+    if type(device_in_use) ~= "function" then return false end
+    local ok, active = pcall(device_in_use, input_manager, "gamepad")
+    return ok and active == true
+end
+
+local function activation_is_held(activation, custom_held, controller_action, input_extension)
+    if controller_input_active() then
+        return controller_action ~= "off" and input_extension
+            and input_extension:get(controller_action) or false
+    end
     if activation == "custom" then return custom_held end
     if not input_extension then return false end
     local left_held = physical_action_one_hold
@@ -613,6 +633,7 @@ mod.on_setting_changed = function(setting_id)
 
     if setting_id == "aim_distance" or setting_id == "aim_fov" or setting_id == "aim_smoothness" or
        setting_id == "aim_curve" or setting_id == "aim_location" or setting_id == "aim_activation"
+       or setting_id == "aim_controller_activation"
        or setting_id == "show_aim_fov" or setting_id == "aim_fov_opacity"
        or setting_id == "aim_fov_red" or setting_id == "aim_fov_green"
        or setting_id == "aim_fov_blue" then
@@ -621,8 +642,15 @@ mod.on_setting_changed = function(setting_id)
     end
 
     if setting_id == "trigger_activation" or setting_id == "trigger_fov"
+        or setting_id == "trigger_controller_activation"
         or setting_id == "trigger_fire_fov" or setting_id == "trigger_smoothness"
-        or setting_id == "rage_distance" or setting_id == "rage_smoothness" then
+        or setting_id == "rage_distance" or setting_id == "rage_smoothness"
+        or setting_id == "rage_controller_activation" then
+        refresh_settings()
+        return
+    end
+
+    if setting_id == "esp_controller_activation" then
         refresh_settings()
         return
     end
@@ -2051,7 +2079,13 @@ end)
 
 local semi_auto_pressed_action_t = setmetatable({}, { __mode = "k" })
 
-local function activation_is_held_in_cache(activation, custom_held, lookup, input_cache, index)
+local function activation_is_held_in_cache(
+    activation, custom_held, controller_action, lookup, input_cache, index
+)
+    if controller_input_active() then
+        local controller_index = controller_action ~= "off" and lookup[controller_action]
+        return controller_index and input_cache[controller_index][index] or false
+    end
     if activation == "custom" then return custom_held end
     local left_index = lookup.action_one_hold
     local right_index = lookup.action_two_hold
@@ -2146,6 +2180,11 @@ mod:hook("HumanInputHandler", "_parse_input", function(
     local player_unit = player and player.player_unit
     if not player_unit or self._player ~= player or not lookup then return end
 
+    if esp_controller_activation ~= "off" and controller_input_active()
+        and cached_input(lookup, input_cache, index, esp_controller_activation) then
+        mod.toggle_esp()
+    end
+
     physical_action_one_hold = hold_index and input_cache[hold_index][index] == true or false
     local fixed_time_step = Managers.state and Managers.state.game_session
         and Managers.state.game_session.fixed_time_step
@@ -2191,10 +2230,13 @@ mod:hook("HumanInputHandler", "_parse_input", function(
     local generated_fire = requested_auto_fire_mode and t and requested_auto_fire_until
         and t <= requested_auto_fire_until
     if generated_fire and requested_auto_fire_mode == "rage" then
-        generated_fire = rage_held
+        generated_fire = activation_is_held_in_cache(
+            "custom", rage_held, rage_controller_activation, lookup, input_cache, index
+        )
     elseif generated_fire and requested_auto_fire_mode == "trigger" then
         generated_fire = activation_is_held_in_cache(
-            trigger_activation, triggerbot_held, lookup, input_cache, index
+            trigger_activation, triggerbot_held, trigger_controller_activation,
+            lookup, input_cache, index
         )
     end
     if generated_fire and governor_suppress_fire then generated_fire = false end
@@ -2316,19 +2358,28 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     update_survival(unit, first_person, t)
 
     local mode
-    if rage_held then
+    if activation_is_held(
+        "custom", rage_held, rage_controller_activation, self._input_extension
+    ) then
         mode = "rage"
-    elseif activation_is_held(trigger_activation, triggerbot_held, self._input_extension) then
+    elseif activation_is_held(
+        trigger_activation, triggerbot_held, trigger_controller_activation,
+        self._input_extension
+    ) then
         mode = "trigger"
-    elseif activation_is_held(aim_activation, aimbot_held, self._input_extension) then
+    elseif activation_is_held(
+        aim_activation, aimbot_held, aim_controller_activation, self._input_extension
+    ) then
         mode = "aim"
     end
     local camera_forward = Quaternion.forward(first_person.rotation)
     local on_screen = function(position) return self:is_within_default_view(position) end
     if not mode then
         clear_aim_lock()
-        local preview_mode = aim_activation ~= "off" and "aim"
-            or trigger_activation ~= "off" and "trigger"
+        local preview_mode = (aim_activation ~= "off"
+            or aim_controller_activation ~= "off") and "aim"
+            or (trigger_activation ~= "off"
+                or trigger_controller_activation ~= "off") and "trigger"
         if not preview_mode then
             set_aim_preview(nil, nil, nil, nil)
             return
