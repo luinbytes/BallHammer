@@ -122,6 +122,11 @@ local settings = {
     rage_smoothness = 10,
     rage_controller_activation = "off",
     enable_auto_fire = true,
+    rapid_fire_activation = "custom",
+    rapid_fire_key = {},
+    rapid_fire_speed = 2,
+    enable_quick_reload = false,
+    quick_reload_speed = 2,
     enable_no_recoil = false,
     enable_no_spread = false,
     enable_companion_target = false,
@@ -161,6 +166,15 @@ local recoil_api = {
         recoil_calls = recoil_calls + 1
     end,
 }
+recoil_api.action_handler = {
+    _calculate_time_scale = function() return 1 end,
+}
+recoil_api.action_shoot = {
+    _fire_rate_settings = function()
+        return { fire_time = 0.2, auto_fire_time = 0.1, marker = "native" }
+    end,
+    _scale_auto_fire_time_with_buffs = function(_, value) return value end,
+}
 local director_profile = { name = "ballhammer_test_profile", targets = { {} } }
 local director_positions = {}
 local director_actor
@@ -168,6 +182,12 @@ local prefer_director_head = false
 local director_no_candidates = false
 package.preload["scripts/utilities/recoil"] = function()
     return recoil_api
+end
+package.preload["scripts/utilities/action/action_handler"] = function()
+    return recoil_api.action_handler
+end
+package.preload["scripts/extension_systems/weapon/actions/action_shoot"] = function()
+    return recoil_api.action_shoot
 end
 package.preload["scripts/utilities/action/action"] = function()
     return { damage_template = function() return director_profile end }
@@ -292,6 +312,7 @@ local player = {
 local marker_events = {}
 local aim_marker_events = {}
 local held_action = "action_one_hold"
+raw_mouse_left_held = false
 local preexisting_units = {}
 local preexisting_pickups = {}
 luggable_socket_units = {}
@@ -385,7 +406,7 @@ Managers = {
             assert(device == "mouse")
             return {
                 button_index = function(_, button) return button end,
-                held = function() return false end,
+                held = function(_, button) return button == "left" and raw_mouse_left_held end,
             }
         end,
     },
@@ -528,6 +549,9 @@ ScriptUnit = {
         if system == "locomotion_system" and units[unit].velocity then
             return { current_velocity = function() return units[unit].velocity end }
         end
+        if system == "behavior_system" and units[unit].running_action then
+            return { running_action = function() return units[unit].running_action end }
+        end
         if system == "health_system" then
             return {
                 current_health_percent = function() return units[unit].health or 1 end,
@@ -578,8 +602,10 @@ World = {
     end,
 }
 Actor = { unit = function(actor) return actor.unit end }
+raycast_calls = 0
 PhysicsWorld = {
     raycast = function(world, origin, direction, _, cast_type, ...)
+        raycast_calls = raycast_calls + 1
         assert(world == physics_world, "raycast should use the gameplay physics world")
         local ox, oy, oz = Vector3.to_elements(origin)
         local cx, cy, cz = Vector3.to_elements(hud_camera_position)
@@ -603,6 +629,14 @@ PhysicsWorld = {
 }
 
 dofile("scripts/mods/BallHammer/BallHammer.lua")
+hud_settings = { mod.get_hud_settings() }
+assert(hud_settings[1] and hud_settings[2] and hud_settings[3] == 80
+    and hud_settings[4] and hud_settings[5] == 80,
+    "tactical HUD should expose safe defaults to the registered native element")
+hud_rows = mod.get_hud_status_rows()
+assert(#hud_rows == 5 and hud_rows[1].label == "AIM" and hud_rows[1].key == "LMB"
+    and hud_rows[4].state == "OFF" and hud_rows[5].state == "OFF",
+    "system status should expose configured bindings and live subsystem states")
 local function apply_delayed_hook(object_name, object, method)
     local handler = hooks["delayed." .. object_name .. "." .. method]
     assert(handler, object_name .. "." .. method .. " should use DMF's deferred hook path")
@@ -618,6 +652,43 @@ apply_delayed_hook("PlayerUnitWeaponSpreadExtension",
     CLASS.PlayerUnitWeaponSpreadExtension, "target_style_spread")
 assert(messages[#messages] == "Loaded! - By @luinbytes",
     "load banner should use the requested credit")
+settings.trigger_activation = "custom"
+settings.trigger_key = { "extra_2" }
+mod.on_setting_changed("trigger_key")
+assert(mod.get_hud_status_rows()[2].key == "MOUSE5",
+    "system status should use readable DMF mouse key names")
+settings.trigger_activation = "off"
+mod.on_setting_changed("trigger_activation")
+
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_hit_scan" }
+) == 1, "rapid fire should leave native fire timing unchanged until its bind is held")
+mod.rapid_fire_held(true)
+settings.rapid_fire_speed = 3
+mod.on_setting_changed("rapid_fire_speed")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_hit_scan" }
+) == 3, "rapid fire speed should scale manual shot recovery while its bind is held")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_pellets" }
+) == 3, "rapid fire should scale all shooting action timing while its bind is held")
+assert(math.abs(recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).fire_time
+    - 0.2 / 3) < 0.0001
+    and math.abs(recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).auto_fire_time
+        - 0.1 / 3) < 0.0001
+    and recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).marker == "native",
+    "rapid fire should scale local fire-rate settings while its bind is held")
+mod.rapid_fire_held(false)
+assert(recoil_api.action_shoot._fire_rate_settings({ _player_unit = {} }).auto_fire_time == 0.1,
+    "rapid fire should not alter other players' weapon intervals")
+settings.enable_quick_reload = true
+settings.quick_reload_speed = 3
+mod.on_setting_changed("enable_quick_reload")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "reload_state" }
+) == 3 and recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "reload_shotgun" }
+) == 3, "quick reload speed should scale native reload timing and animation speed")
 
 local rotation = {}
 assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread({ _unit = player_unit }, rotation).spread == rotation,
@@ -640,8 +711,8 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.target_style_spread(
 assert(randomized_spread_calls == 2 and target_style_spread_calls == 2,
     "no spread must still advance Darktide's deterministic spread state")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, player_unit)
-assert(recoil_calls == 2,
-    "no recoil must preserve native recoil state for multiplayer prediction")
+assert(recoil_calls == 1,
+    "no recoil must stop local recoil from accumulating between shots")
 local camera_pitch, camera_yaw = recoil_api.first_person_offset(
     nil, local_recoil_component
 )
@@ -653,10 +724,10 @@ local remote_camera_pitch, remote_camera_yaw = recoil_api.first_person_offset(
 assert(remote_camera_pitch == 0.3 and remote_camera_yaw == -0.1,
     "no recoil must preserve non-local camera recoil on a multiplayer host")
 local weapon_pitch, weapon_yaw = recoil_api.weapon_offset(
-    nil, { pitch_offset = 0.4, yaw_offset = -0.2 }
+    nil, local_recoil_component
 )
-assert(weapon_pitch == 0.4 and weapon_yaw == -0.2,
-    "no recoil must preserve the weapon offset used by multiplayer shot prediction")
+assert(weapon_pitch == 0 and weapon_yaw == 0,
+    "no recoil should suppress the local weapon offset so shots follow the aimed bone")
 assert(orientation.yaw == weapon_orientation_yaw and orientation.pitch == weapon_orientation_pitch,
     "weapon suppression must never compensate through player orientation")
 local remote_weapon_unit = {}
@@ -664,7 +735,7 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
     { _unit = remote_weapon_unit }, rotation
 ).spread == rotation, "no spread must not alter remote weapon prediction")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, remote_weapon_unit)
-assert(recoil_calls == 3, "no recoil must not alter remote weapon prediction")
+assert(recoil_calls == 2, "no recoil must not alter remote weapon prediction")
 
 hooks["HudElementWorldMarkers.init"](live_world_markers)
 assert(aim_marker_events[1] and aim_marker_events[1].marker_name == "ballhammer_aim_marker",
@@ -702,7 +773,8 @@ units[loose_battery] = {
     position = Vector3(1, 6, 0),
 }
 hooks["InteracteeExtension.init"](nil, nil, loose_battery)
-assert(#marker_events == 2 and marker_events[2].data.name == "Battery 01 Luggable",
+assert(#marker_events == 2 and marker_events[2].data.name == "Battery 01 Luggable"
+    and marker_events[2].data.category == "mission",
     "pickup ESP should preserve loose mission batteries")
 local stimm_names = {
     syringe_corruption_pocketable = "Med Stimm",
@@ -908,6 +980,8 @@ assert(marker_events[1] and marker_events[1].unit == training_respawn,
 HEALTH_ALIVE[training_respawn] = false
 
 mod.toggle_esp()
+assert(mod.enabled and not mod.esp_enabled,
+    "/esp should hide ESP without changing the DMF lifecycle state")
 
 local blocked_best = {}
 local visible_fallback = {}
@@ -1044,6 +1118,7 @@ assert(preview_target == angular_pick and preview_position,
 local _, _, near_preview_radius = mod.get_aim_preview()
 units[angular_pick].nodes.j_head = Vector3(8, 40, 2.2)
 camera_rotation = Vector3.normalize(Vector3(8, 40, 2.2))
+preview_raycast_calls = raycast_calls
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.905)
 local animated_target, animated_position, far_preview_radius = mod.get_aim_preview()
 local animated_x, animated_y, animated_z = Vector3.to_elements(animated_position)
@@ -1052,12 +1127,30 @@ assert(animated_target == angular_pick and animated_x == 8 and animated_y == 40 
         tostring(animated_target == angular_pick), animated_x or -1, animated_y or -1, animated_z or -1))
 assert(far_preview_radius < near_preview_radius,
     "the visible acquisition circle should shrink with target distance")
+assert(raycast_calls - preview_raycast_calls == 1,
+    "idle preview should update its selected target without rescanning every enemy each frame")
+units[angular_pick].nodes.j_head = Vector3(1, 40, 2.2)
+camera_rotation = Vector3.normalize(Vector3(1, 40, 2.2))
+preview_raycast_calls = raycast_calls
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.9055)
+assert(raycast_calls - preview_raycast_calls == 1 and not mod.get_aim_preview(),
+    "an occluded preview should test only its lock before the next acquisition scan")
+units[angular_pick].nodes.j_head = Vector3(8, 40, 2.2)
+camera_rotation = Vector3.normalize(Vector3(8, 40, 2.2))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.11, 3.9058)
+HEALTH_ALIVE[angular_pick] = false
+preview_raycast_calls = raycast_calls
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.12, 3.906)
+assert(raycast_calls == preview_raycast_calls and not mod.get_aim_preview(),
+    "an invalid preview target should wait for the next scheduled full acquisition scan")
+HEALTH_ALIVE[angular_pick] = true
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.22, 4.01)
 units[angular_pick].nodes.j_head = Vector3(5, 20, 1.8)
 camera_rotation = Vector3.normalize(Vector3(5, 20, 1.8))
 orientation.yaw, orientation.pitch = 0, 0
 smart_direct_target = direct_pick
 held_action = "action_two_hold"
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.91)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.23, 4.02)
 assert(math.abs(orientation.yaw - angular_yaw) < math.abs(orientation.yaw - direct_yaw),
     "aim activation should acquire the same target shown by the idle preview")
 smart_direct_target = nil
@@ -1089,7 +1182,7 @@ for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 HEALTH_ALIVE[outside_fov] = true
 assert(mod.get_unit_data(outside_fov), "outside-FOV preview target should remain registered")
 camera_rotation = Vector3.normalize(Vector3(30, 5, 1.8))
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.97)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.11, 3.97)
 local outside_preview, _, outside_radius = mod.get_aim_preview()
 assert(outside_preview == outside_fov and outside_radius,
     "idle preview should place the acquisition circle on the closest on-screen target even before acquisition: "
@@ -1204,7 +1297,7 @@ settings.trigger_activation = "off"
 mod.on_setting_changed("aim_activation")
 mod.on_setting_changed("trigger_activation")
 camera_rotation = Vector3.normalize(Vector3(4, 20, 0))
-local controller_activation_ids = {
+controller_activation_ids = {
     "aim_controller_activation",
     "trigger_controller_activation",
     "rage_controller_activation",
@@ -1283,9 +1376,9 @@ end
 
 input_values.action_one_hold = false
 input_values.weapon_extra_pressed = true
-local esp_enabled_before_controller_press = mod.enabled
+esp_enabled_before_controller_press = mod.esp_enabled
 parse_network_input(0.1)
-assert(mod.enabled == esp_enabled_before_controller_press,
+assert(mod.esp_enabled == esp_enabled_before_controller_press,
     "ESP controller action must not toggle while its selector is off")
 input_values.weapon_extra_pressed = false
 parse_network_input(0.2)
@@ -1293,20 +1386,20 @@ settings.esp_controller_activation = "weapon_extra_pressed"
 mod.on_setting_changed("esp_controller_activation")
 input_values.weapon_extra_pressed = true
 parse_network_input(0.3)
-assert(mod.enabled == esp_enabled_before_controller_press,
+assert(mod.esp_enabled == esp_enabled_before_controller_press,
     "ESP controller action must not toggle while keyboard/mouse is active")
 input_values.weapon_extra_pressed = false
 parse_network_input(0.4)
 gamepad_active = true
 input_values.weapon_extra_pressed = true
 parse_network_input(0.5)
-assert(mod.enabled ~= esp_enabled_before_controller_press,
+assert(mod.esp_enabled ~= esp_enabled_before_controller_press,
     "ESP selector should toggle on its configured action when gamepad is active")
 input_values.weapon_extra_pressed = false
 parse_network_input(0.6)
 input_values.weapon_extra_pressed = true
 parse_network_input(0.7)
-assert(mod.enabled == esp_enabled_before_controller_press,
+assert(mod.esp_enabled == esp_enabled_before_controller_press,
     "a later configured pressed action should toggle ESP back")
 input_values.weapon_extra_pressed = false
 parse_network_input(0.8)
@@ -1336,8 +1429,35 @@ assert(not parse_network_input(4),
 settings.enable_auto_fire = true
 mod.on_setting_changed("enable_auto_fire")
 shot_ready = false
+input_values.action_one_hold = false
 assert(not parse_network_input(5),
     "semi-automatic fire should wait for Darktide's action timing")
+held_action = nil
+raw_mouse_left_held = true
+units[activation_target].position = Vector3(8, 20, 0)
+camera_rotation = Vector3.normalize(Vector3(8, 20, 0))
+orientation.yaw, orientation.pitch = 0, 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.1, 11
+)
+cooldown_target, cooldown_position = mod.get_aim_preview()
+assert(orientation.yaw < 0 and cooldown_target == activation_target
+    and Vector3.to_elements(cooldown_position) == 8,
+    "holding raw mouse input should track an animated target while fire is filtered on cooldown")
+units[activation_target].position = Vector3(12, 20, 0)
+camera_rotation = Vector3.normalize(Vector3(12, 20, 0))
+orientation.yaw, orientation.pitch = 0, 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.2, 12
+)
+cooldown_target, cooldown_position = mod.get_aim_preview()
+assert(orientation.yaw < 0 and cooldown_target == activation_target
+    and Vector3.to_elements(cooldown_position) == 12,
+    "raw mouse hold should refresh the aim point on every recovery tick")
+units[activation_target].position = Vector3(4, 20, 0)
+raw_mouse_left_held = false
+held_action = "action_one_hold"
+input_values.action_one_hold = true
 shot_ready = true
 assert(parse_network_input(6),
     "semi-automatic fire should send when Darktide accepts the action")
@@ -1366,6 +1486,13 @@ assert(parse_network_input(8),
 input_values.action_one_hold = false
 assert(not parse_network_input(9),
     "releasing mouse one should stop and reset semi-automatic fire")
+shot_ready = true
+weapon_action_component.start_t = 1.45
+mod.rapid_fire_held(true)
+rapid_inputs = { parse_network_input(9.5) }
+assert(not rapid_inputs[1] and not rapid_inputs[4],
+    "rapid-fire bind should not generate shots without manual fire input")
+mod.rapid_fire_held(false)
 
 settings.aim_activation = "off"
 settings.trigger_activation = "custom"
@@ -1389,6 +1516,16 @@ input_handler._frame = 21
 local trigger_pressed, _, _, trigger_hold = parse_network_input(10)
 assert(trigger_pressed and trigger_hold,
     "triggerbot fire must be written into Darktide's networked input frame")
+weapon_action_component.template.action_inputs = { shoot_charge = {} }
+weapon_action_component.start_t = 1.55
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.05, 20
+)
+input_handler._frame = 21
+alternate_pressed, _, _, alternate_hold = parse_network_input(10.5)
+assert(alternate_pressed and alternate_hold,
+    "triggerbot must send a click even when the current weapon uses a nonstandard fire action")
+weapon_action_component.template.action_inputs = weapon_action_inputs
 local trigger_replacement = {}
 units[trigger_replacement] = { breed = "renegade_sniper", position = Vector3(12, 20, 0) }
 HEALTH_ALIVE[trigger_replacement] = true
@@ -1477,15 +1614,15 @@ held_action = "action_two_hold"
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 2.25, 22
 )
-assert(orientation.yaw < 0,
-    "aim, trigger, and rage shared targeting should fall back when the director has no usable zones")
+assert(orientation.yaw == 0,
+    "an armor evaluation with no damageable zones should not fall back to an immune bone")
 held_action = nil
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 2.26, 22
 )
 local fallback_preview, _, fallback_radius = mod.get_aim_preview()
-assert(fallback_preview == directed_target and fallback_radius,
-    "the target FOV circle should keep drawing when the director falls back to the configured bone")
+assert(fallback_preview == nil and fallback_radius == nil,
+    "the target FOV circle should not advertise an immune target")
 director_no_candidates = false
 director_profile = { name = "ballhammer_test_profile_restored", targets = { {} } }
 
@@ -1628,13 +1765,13 @@ weapon_action_component.template.actions = {
 camera_rotation = Vector3.normalize(Vector3(1, 4, 0))
 orientation.yaw, orientation.pitch = 0, 0
 held_action = "action_one_hold"
-input_values.action_one_hold = true
+input_values.action_one_hold = false
 parse_network_input(18)
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 2.6, 28
 )
 assert(orientation.yaw == 0 and orientation.pitch == 0,
-    "melee aim should ignore an in-FOV target beyond the current sweep reach")
+    "melee aim should preserve sweep reach while fire input is filtered on cooldown")
 
 held_action = nil
 input_values.action_one_hold = false
@@ -1807,7 +1944,7 @@ disabling_unit = nil
 disabling_type = "none"
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
-local trapper = {}
+trapper = {}
 units[trapper] = {
     breed_data = {
         name = "renegade_netgunner",
@@ -1928,6 +2065,7 @@ units[multiplayer_mutant] = {
     velocity = Vector3(0, -8, 0),
 }
 HEALTH_ALIVE[multiplayer_mutant] = true
+set_replicated_fields(multiplayer_mutant, { target_unit_id = 1 })
 hooks["HealthExtension.init"](nil, nil, multiplayer_mutant)
 settings.enable_threat_reactions = true
 mod.on_setting_changed("enable_threat_reactions")
@@ -1943,9 +2081,14 @@ parse_network_input(42)
 assert(network_input_cache[6][42] ~= true,
     "physical attacks should be preserved until the final safe dodge window")
 input_handler._frame = 140
+Managers.state.game_session.fixed_time_step = nil
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.0, 140
+)
 parse_network_input(46)
 assert(network_input_cache[6][46] == true,
-    "an imminent multiplayer mutant must dodge even while an attack is held")
+    "an imminent multiplayer mutant must dodge even when parser time is unavailable")
+Managers.state.game_session.fixed_time_step = 0.1
 input_values.action_one_hold = false
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
@@ -1954,6 +2097,31 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 )
 input_handler._frame = 145
 parse_network_input(39)
+replicated_mutant_hook = {}
+units[replicated_mutant_hook] = {
+    breed_data = {
+        name = "cultist_mutant",
+        base_height = 2.4,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+}
+HEALTH_ALIVE[replicated_mutant_hook] = true
+set_replicated_fields(replicated_mutant_hook, { target_unit_id = 1 })
+hooks["HealthExtension.init"](nil, nil, replicated_mutant_hook)
+hooks["BtMutantChargerChargeAction._start_charging"](
+    {}, replicated_mutant_hook, {}, nil, 14.55
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.56, 146
+)
+assert((mod.get_threat_indicator() or ""):find("DODGE", 1, true),
+    "replicated specialist targets should produce a threat marker when client scratchpad data is absent")
+assert((mod.get_unit_data(replicated_mutant_hook).threat_text or ""):find("DODGE", 1, true),
+    "registered threats should update the source marker text")
+HEALTH_ALIVE[replicated_mutant_hook] = false
+hooks["OutlineSystem.on_remove_extension"]({}, replicated_mutant_hook, nil)
 multiplayer_rager = {}
 units[multiplayer_rager] = {
     breed_data = {
@@ -1976,11 +2144,30 @@ hooks["WwiseWorld.trigger_resource_event"](
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 14.6, 146
 )
+threat_indicator_value = mod.get_threat_indicator()
+assert(string.match(threat_indicator_value or "", "^DODGE %u+ NOW$"),
+    "the threat indicator must show the planned dodge direction and action moment: "
+        .. tostring(threat_indicator_value))
 input_handler._frame = 146
 parse_network_input(43)
 assert(network_input_cache[6][43] == true
     and (network_input_cache[7][43] == 1 or network_input_cache[8][43] == 1),
     "a multiplayer rager swing cue should trigger a lateral dodge")
+assert(mod.get_threat_indicator() == nil,
+    "the threat indicator must clear after its dodge input is issued")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.85, 148
+)
+hooks["WwiseWorld.trigger_resource_event"](
+    {}, "wwise/events/weapon/play_minion_swing_1h_sword_elite"
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.9, 149
+)
+input_handler._frame = 149
+parse_network_input(58)
+assert(network_input_cache[6][58] ~= true,
+    "one rager attack burst must not schedule a second dodge from repeated audio cues")
 hooks["BtMeleeAttackAction._start_attack_anim"](
     {}, multiplayer_rager, units[multiplayer_rager].breed_data, player_unit, 15.1, {}, {
         attack_event = "attack_combo",
@@ -1991,6 +2178,8 @@ hooks["BtMeleeAttackAction._start_attack_anim"](
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 15.2, 152
 )
+assert(string.match(mod.get_threat_indicator() or "", "^DODGE %u+ 0%.1$"),
+    "authoritative attacks must count down to Darktide's dodge window")
 input_handler._frame = 152
 parse_network_input(56)
 assert(network_input_cache[6][56] ~= true,
@@ -2002,6 +2191,8 @@ input_handler._frame = 154
 parse_network_input(57)
 assert(network_input_cache[6][57] == true,
     "an authoritative melee attack should dodge inside Darktide's own window")
+assert(mod.get_threat_indicator() == nil,
+    "an authoritative threat indicator must clear after its dodge input")
 HEALTH_ALIVE[multiplayer_rager] = false
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 16.5, 165
@@ -2075,6 +2266,13 @@ input_handler._frame = 192
 parse_network_input(48)
 assert(network_input_cache[6][48] == true,
     "a replicated multiplayer flamer beam should network a directional dodge")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 19.8, 198
+)
+input_handler._frame = 198
+parse_network_input(59)
+assert(network_input_cache[6][59] ~= true,
+    "one sustained flamer beam must not re-arm defensive dodges")
 HEALTH_ALIVE[multiplayer_flamer] = false
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 20.0, 200
@@ -2183,13 +2381,99 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 input_handler._frame = 262
 parse_network_input(55)
 
+local unknown_elite = {}
+units[unknown_elite] = {
+    breed_data = {
+        name = "renegade_unknown_elite",
+        tags = { minion = true, elite = true },
+    },
+    position = Vector3(0, 3, 0),
+}
+HEALTH_ALIVE[unknown_elite] = true
+hooks["HealthExtension.init"](nil, nil, unknown_elite)
+hooks["BtMeleeAttackAction._start_attack_anim"](
+    {}, unknown_elite, units[unknown_elite].breed_data, player_unit, 27, {}, {
+        attack_event = "attack_01",
+        attack_timing = 27.2,
+    }, {}
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 27.11, 271
+)
+assert(mod.get_hud_status_rows()[4].state ~= "MARKER",
+    "unknown attacks should remain marker-only instead of occupying the defense queue")
+
+local removed_trapper = {}
+units[removed_trapper] = {
+    breed_data = units[trapper].breed_data,
+    position = Vector3(0, 7, 0),
+}
+HEALTH_ALIVE[removed_trapper] = true
+hooks["HealthExtension.init"](nil, nil, removed_trapper)
+hooks["BtShootNetAction._start_shooting"]({}, removed_trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 27.3, 273
+)
+assert(mod.get_hud_status_rows()[4].state == "DODGE",
+    "a committed specialist attack should occupy the defense queue")
+settings.enable_threat_reactions = false
+mod.on_setting_changed("enable_threat_reactions")
+assert(mod.get_hud_status_rows()[4].state == "READY",
+    "disabling threat reactions should cancel their queued dodge while Guard Brain stays enabled")
+settings.enable_threat_reactions = true
+mod.on_setting_changed("enable_threat_reactions")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 28, 280
+)
+hooks["BtShootNetAction._start_shooting"]({}, removed_trapper, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 28.2, 282
+)
+assert(mod.get_hud_status_rows()[4].state == "DODGE",
+    "the replacement specialist threat should queue a dodge")
+hooks["OutlineSystem.on_remove_extension"]({}, removed_trapper, "unit_data_system")
+assert(mod.get_hud_status_rows()[4].state == "READY",
+    "removing a threat source should cancel its queued defense")
+HEALTH_ALIVE[removed_trapper] = false
+HEALTH_ALIVE[unknown_elite] = false
+
+do
+    local delayed_trapper = {}
+    units[delayed_trapper] = {
+        breed_data = units[trapper].breed_data,
+        position = Vector3(0, 7, 0),
+    }
+    HEALTH_ALIVE[delayed_trapper] = true
+    hooks["HealthExtension.init"](nil, nil, delayed_trapper)
+    hooks["BtShootNetAction._start_shooting"]({}, delayed_trapper, {
+        perception_component = { target_unit = player_unit },
+    })
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 28.31, 283
+    )
+    hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+        first_person_extension, player_unit, 0.1, 28.46, 284
+    )
+    input_handler._frame = 285
+    parse_network_input(63)
+    assert(network_input_cache[6][63] == true,
+        "an input queued inside the dodge window must survive threat display expiry")
+    HEALTH_ALIVE[delayed_trapper] = false
+end
+
 local guard_units = { {}, {}, {} }
 local guard_positions = { Vector3(-2, 0, 0), Vector3(2, 0, 0), Vector3(0, 2, 0) }
 for i = 1, #guard_units do
     units[guard_units[i]] = {
         breed_data = { name = "renegade_melee", tags = { minion = true } },
         position = guard_positions[i],
+        running_action = "bt_shoot_action",
     }
+    BLACKBOARDS[guard_units[i]] = { perception = { target_unit = player_unit } }
     HEALTH_ALIVE[guard_units[i]] = true
     hooks["HealthExtension.init"](nil, nil, guard_units[i])
 end
@@ -2202,12 +2486,27 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 30, 300
 )
 input_handler._frame = 300
-parse_network_input(40)
-assert(network_input_cache[3][40] == true and network_input_cache[2][40] ~= true,
-    "Guard Brain should establish block before attempting a push")
+parse_network_input(60)
+assert(network_input_cache[3][60] ~= true and network_input_cache[2][60] ~= true,
+    "Guard Brain should ignore nearby enemies that are only shooting")
+for i = 1, #guard_units do
+    BLACKBOARDS[guard_units[i]] = nil
+    set_replicated_fields(guard_units[i], { target_unit_id = 1 })
+    units[guard_units[i]].running_action = "bt_melee_attack_action"
+end
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 30.1, 301
+)
 input_handler._frame = 301
-parse_network_input(41)
-assert(network_input_cache[3][41] == true and network_input_cache[2][41] == true,
+parse_network_input(61)
+assert(network_input_cache[3][61] == true and network_input_cache[2][61] ~= true,
+    "Guard Brain should establish block before attempting a push: state="
+        .. tostring(mod.get_hud_status_rows()[4].state)
+        .. " block=" .. tostring(network_input_cache[3][61])
+        .. " push=" .. tostring(network_input_cache[2][61]))
+input_handler._frame = 302
+parse_network_input(62)
+assert(network_input_cache[3][62] == true and network_input_cache[2][62] == true,
     "Guard Brain should send the push attack only after block is established")
 for i = 1, #guard_units do HEALTH_ALIVE[guard_units[i]] = false end
 settings.enable_resource_governor = true
@@ -2240,6 +2539,18 @@ local no_target_ok, no_target_error = pcall(
     first_person_extension, player_unit, 0.1, 1.7, 17
 )
 assert(no_target_ok, "holding aim without a valid target should be a no-op: " .. tostring(no_target_error))
+
+if not mod.esp_enabled then mod.toggle_esp() end
+current_outline_system = setmetatable({}, {
+    __index = function() error("destroyed outline system") end,
+})
+outline_watchdog_ok, outline_watchdog_error = pcall(function()
+    for frame = 1, 60 do
+        hooks["HudElementWorldMarkers.update"]({}, 0.016, 40 + frame * 0.016)
+    end
+end)
+assert(outline_watchdog_ok,
+    "outline watchdog should survive system teardown: " .. tostring(outline_watchdog_error))
 
 local lifecycle_unit = {}
 units[lifecycle_unit] = {

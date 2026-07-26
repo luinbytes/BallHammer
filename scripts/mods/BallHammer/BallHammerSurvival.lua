@@ -22,6 +22,41 @@ local DODGE_WINDOWS = {
     overhead = { 0.18, 0.55 },
 }
 
+Survival.HIGH_RISK_MELEE = {
+    chaos_ogryn_executor = true,
+    cultist_berzerker = true,
+    renegade_berzerker = true,
+    renegade_executor = true,
+}
+
+Survival.MELEE_SOUND_CUES = {
+    ["wwise/events/weapon/play_minion_swing_1h_sword_elite"] = {
+        breeds = { cultist_berzerker = true, renegade_berzerker = true },
+        kind = "rager",
+        impact_lead = 0.22,
+    },
+    ["wwise/events/weapon/play_minion_swing_2h_sword_elite"] = {
+        breeds = { cultist_berzerker = true, renegade_berzerker = true },
+        kind = "rager",
+        impact_lead = 0.25,
+    },
+    ["wwise/events/weapon/play_minion_swing_chainaxe"] = {
+        breeds = { renegade_executor = true },
+        kind = "overhead",
+        impact_lead = 0.3,
+    },
+    ["wwise/events/weapon/play_minion_swing_2h_blunt_large_cleave"] = {
+        breeds = { chaos_ogryn_executor = true },
+        kind = "overhead",
+        impact_lead = 0.35,
+    },
+    ["wwise/events/weapon/play_minion_swing_2h_blunt_large_sweep"] = {
+        breeds = { chaos_ogryn_executor = true },
+        kind = "overhead",
+        impact_lead = 0.3,
+    },
+}
+
 function Survival.safe_timing(start_t, end_t, timing)
     if not start_t or not end_t or end_t < start_t then return nil end
     return start_t + (end_t - start_t) * math.max(0, math.min(100, timing or 50)) / 100
@@ -76,6 +111,12 @@ function Survival.govern(current, target, increment, suppressed, resume_margin)
     local resume_at = target - (resume_margin or 0.1)
     if suppressed and current <= resume_at then return false, true end
     return current + math.max(increment or 0, 0) > target, false
+end
+
+function Survival.resource_increment(current, previous, estimate)
+    local observed = math.max((current or 0) - (previous or current or 0), 0)
+    if observed == 0 then return math.max(estimate or 0.02, 0.02) end
+    return math.max(observed, (estimate or 0.02) * 0.9, 0.02)
 end
 
 return Survival

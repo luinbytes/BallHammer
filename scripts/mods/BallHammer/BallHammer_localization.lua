@@ -2,6 +2,11 @@ return {
     mod_name = { en = "BallHammer" },
     mod_description = { en = "All-enemy ESP with persistent aim, triggerbot, rage, and weapon controls" },
 
+    visuals_category = { en = "Visuals and HUD" },
+    aim_category = { en = "Aim Assistance" },
+    defense_category = { en = "Defense and Survival" },
+    utility_category = { en = "Weapon and Companion" },
+
     esp_settings = { en = "ESP" },
     enable_outlines = { en = "Enemy Outlines" },
     outline_distance = { en = "Outline Distance (m)" },
@@ -103,6 +108,11 @@ return {
 
     weapon_settings = { en = "Weapon" },
     enable_auto_fire = { en = "Automatic Semi-Auto Fire" },
+    rapid_fire_activation = { en = "Rapid Fire Activation" },
+    rapid_fire_key = { en = "Rapid Fire" },
+    rapid_fire_speed = { en = "Rapid Fire Speed (x)" },
+    enable_quick_reload = { en = "Quick Reload" },
+    quick_reload_speed = { en = "Quick Reload Speed (x)" },
     enable_no_recoil = { en = "No Recoil" },
     enable_no_spread = { en = "No Spread" },
 
@@ -110,4 +120,11 @@ return {
     enable_companion_target = { en = "Auto-Target Specials" },
     companion_distance = { en = "Auto-Target Distance (m)" },
     enable_auto_whistle = { en = "Auto-Use Dog EMP" },
+
+    hud_settings = { en = "Tactical HUD" },
+    show_system_status = { en = "System Status Panel" },
+    show_threat_compass = { en = "Horizontal Threat Compass" },
+    threat_compass_range = { en = "Threat Compass Range (m)" },
+    show_player_list = { en = "Squad Player List" },
+    hud_opacity = { en = "Tactical HUD Opacity (%%)" },
 }

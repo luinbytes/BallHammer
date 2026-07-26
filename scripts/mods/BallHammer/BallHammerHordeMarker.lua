@@ -9,11 +9,17 @@ local cached_boxes = {}
 local transition_states = {}
 local TRANSITION_DURATION = 0.28
 local TRANSITION_SPEED = 14
+local HORDE_BONE_NODES = {
+    "j_head", "j_spine", "j_hips",
+    "j_leftshoulder", "j_rightshoulder",
+    "j_lefthand", "j_righthand",
+    "j_leftfoot", "j_rightfoot",
+}
 
 template.name = "ballhammer_horde_marker"
 template.unit_node = "j_head"
 template.size = { 1, 1 }
-template.check_line_of_sight = true
+template.check_line_of_sight = false
 template.max_distance = 999
 template.screen_clamp = false
 
@@ -95,7 +101,10 @@ local function project_box(parent, ui_renderer, marker)
     if not camera then return box end
     local inverse_scale = ui_renderer.inverse_scale
     local aim_node = mod.get_aim_location() == "torso" and "j_spine" or "j_head"
-    local bounds = Bounds.project(parent, ui_renderer, camera, marker.unit, body, data.base_height, aim_node)
+    local bounds = Bounds.project(
+        parent, ui_renderer, camera, marker.unit, body, data.base_height, aim_node,
+        HORDE_BONE_NODES
+    )
     if not bounds then return box end
     local screen_width = RESOLUTION_LOOKUP.width * inverse_scale
     local screen_height = RESOLUTION_LOOKUP.height * inverse_scale
@@ -289,13 +298,12 @@ local function animate_membership(unit, box, t)
     return motion
 end
 
-local function apply_distance_alpha(widget, data, distance, visible)
+local function apply_distance_alpha(widget, data, distance)
     local max_distance = mod.get_horde_distance()
     local fade_start = max_distance * 0.6
     local fade = distance <= fade_start and 1 or math.max(0, (max_distance - distance) / (max_distance - fade_start))
     local alpha = math.floor(data.color[1] * fade + 0.5)
-    local red, green, blue = visible and 255 or data.color[2],
-        visible and 255 or data.color[3], visible and 255 or data.color[4]
+    local red, green, blue = data.color[2], data.color[3], data.color[4]
     for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
         local color = widget.style[style_id].color
         color[1], color[2], color[3], color[4] = alpha, red, green, blue
@@ -340,7 +348,7 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         marker.remove = true
         return
     end
-    if not mod.enabled or not mod.get_enable_horde_esp() then
+    if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_horde_esp() then
         widget.visible = false
         return
     end
@@ -353,8 +361,7 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
     end
     local data = marker.data or mod.horde_unit_data[marker.unit]
     if data then
-        apply_distance_alpha(widget, data, widget.content.distance,
-            marker.raycast_initialized and marker.raycast_result == false)
+        apply_distance_alpha(widget, data, widget.content.distance)
     end
 
     local motion = animate_membership(marker.unit, box, t)

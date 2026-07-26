@@ -233,7 +233,8 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
     end
     local distance = widget.content.distance
     local in_buffer = marker_projection(parent, ui_renderer, marker, widget)
-    if not mod.enabled or not mod.get_enable_pickup_esp() or not in_buffer or not distance
+    if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_pickup_esp()
+        or not in_buffer or not distance
         or distance > mod.get_pickup_distance() then
         widget.visible = false
         return

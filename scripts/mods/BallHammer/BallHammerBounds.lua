@@ -15,14 +15,15 @@ local function screen_point(parent, camera, position, screen_x, screen_y, invers
     return (x - screen_x) * inverse_scale, (y - screen_y) * inverse_scale
 end
 
-function bounds.project(parent, ui_renderer, camera, unit, body, fallback_height, aim_node)
+function bounds.project(parent, ui_renderer, camera, unit, body, fallback_height, aim_node, nodes)
     local screen_x, screen_y = parent:_get_screen_offset(ui_renderer.scale)
     local inverse_scale = ui_renderer.inverse_scale
     local left, right, top, bottom, aim_x, aim_y
     local points = 0
 
-    for i = 1, #BONE_NODES do
-        local node_name = BONE_NODES[i]
+    nodes = nodes or BONE_NODES
+    for i = 1, #nodes do
+        local node_name = nodes[i]
         if Unit.has_node(unit, node_name) then
             local x, y = screen_point(parent, camera, Unit.world_position(unit, Unit.node(unit, node_name)), screen_x, screen_y, inverse_scale)
             if x then

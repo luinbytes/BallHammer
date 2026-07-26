@@ -9,9 +9,23 @@ local mod = {
 get_mod = function() return mod end
 
 local data = dofile("scripts/mods/BallHammer/BallHammer_data.lua")
-local widgets = data.options.widgets
+local categories = data.options.widgets
+assert(#categories == 4, "menu should use four top-level categories")
+assert(categories[1].setting_id == "visuals_category"
+    and categories[2].setting_id == "aim_category"
+    and categories[3].setting_id == "defense_category"
+    and categories[4].setting_id == "utility_category",
+    "menu categories should separate visuals, aim, defense, and utility settings")
+local widgets = {
+    categories[1].sub_widgets[1], categories[1].sub_widgets[2],
+    categories[2].sub_widgets[1], categories[2].sub_widgets[2],
+    categories[2].sub_widgets[3], categories[2].sub_widgets[4],
+    categories[3].sub_widgets[1], categories[3].sub_widgets[2],
+    categories[3].sub_widgets[3], categories[4].sub_widgets[1],
+    categories[4].sub_widgets[2], categories[1].sub_widgets[3],
+}
 
-assert(#widgets == 11, "menu should expose all survival and existing combat sections")
+assert(#widgets == 12, "menu should expose all combat and tactical HUD sections")
 assert(widgets[1].setting_id == "esp_settings", "ESP should be the first section")
 assert(widgets[2].setting_id == "pickup_settings", "Pickup ESP should follow enemy ESP")
 assert(widgets[3].setting_id == "aimbot_settings", "Aimbot should follow ESP sections")
@@ -23,6 +37,7 @@ assert(widgets[8].setting_id == "guard_settings", "Guard Brain should follow thr
 assert(widgets[9].setting_id == "governor_settings", "Resource governor should follow defense")
 assert(widgets[10].setting_id == "weapon_settings", "Weapon should follow survival controls")
 assert(widgets[11].setting_id == "companion_settings", "Companion should be the final section")
+assert(widgets[12].setting_id == "hud_settings", "Tactical HUD should follow gameplay controls")
 
 assert(widgets[2].sub_widgets[1].setting_id == "enable_pickup_esp"
     and widgets[2].sub_widgets[1].default_value == true,
@@ -139,11 +154,27 @@ assert(widgets[9].sub_widgets[4].setting_id == "heat_target"
 assert(widgets[10].sub_widgets[1].setting_id == "enable_auto_fire"
     and widgets[10].sub_widgets[1].default_value == true,
     "semi-automatic repeat fire should have an independent weapon toggle")
-assert(widgets[10].sub_widgets[2].setting_id == "enable_no_recoil"
-    and widgets[10].sub_widgets[2].default_value == false,
+assert(widgets[10].sub_widgets[2].setting_id == "rapid_fire_activation"
+    and widgets[10].sub_widgets[2].default_value == "custom"
+    and widgets[10].sub_widgets[2].options[4].value == "both_mouse"
+    and widgets[10].sub_widgets[2].sub_widgets[1].function_name == "rapid_fire_held",
+    "rapid fire should support mouse and custom held activation")
+assert(widgets[10].sub_widgets[3].setting_id == "rapid_fire_speed"
+    and widgets[10].sub_widgets[3].range[1] == 1.1
+    and widgets[10].sub_widgets[3].range[2] == 10,
+    "rapid fire should expose a bounded speed multiplier")
+assert(widgets[10].sub_widgets[4].setting_id == "enable_quick_reload"
+    and widgets[10].sub_widgets[4].default_value == false,
+    "quick reload should be an opt-in toggle")
+assert(widgets[10].sub_widgets[4].sub_widgets[1].setting_id == "quick_reload_speed"
+    and widgets[10].sub_widgets[4].sub_widgets[1].range[1] == 1.1
+    and widgets[10].sub_widgets[4].sub_widgets[1].range[2] == 5,
+    "quick reload should expose a bounded speed multiplier")
+assert(widgets[10].sub_widgets[5].setting_id == "enable_no_recoil"
+    and widgets[10].sub_widgets[5].default_value == false,
     "recoil suppression should have an independent weapon toggle")
-assert(widgets[10].sub_widgets[3].setting_id == "enable_no_spread"
-    and widgets[10].sub_widgets[3].default_value == false,
+assert(widgets[10].sub_widgets[6].setting_id == "enable_no_spread"
+    and widgets[10].sub_widgets[6].default_value == false,
     "spread suppression should have an independent weapon toggle")
 assert(widgets[11].sub_widgets[1].setting_id == "enable_companion_target",
     "companion auto-target should have an independent toggle")
@@ -152,6 +183,21 @@ assert(widgets[11].sub_widgets[2].setting_id == "companion_distance",
 assert(widgets[11].sub_widgets[3].setting_id == "enable_auto_whistle"
     and widgets[11].sub_widgets[3].default_value == false,
     "automatic dog EMP should have an independent opt-in toggle")
+assert(widgets[12].sub_widgets[1].setting_id == "show_system_status"
+    and widgets[12].sub_widgets[1].default_value == true,
+    "system status should be visible by default")
+assert(widgets[12].sub_widgets[2].setting_id == "show_threat_compass"
+    and widgets[12].sub_widgets[2].default_value == true,
+    "horizontal threat compass should be visible by default")
+assert(widgets[12].sub_widgets[3].setting_id == "threat_compass_range"
+    and widgets[12].sub_widgets[3].range[1] == 10
+    and widgets[12].sub_widgets[3].range[2] == 150,
+    "threat compass should expose a bounded range")
+assert(widgets[12].sub_widgets[4].setting_id == "show_player_list"
+    and widgets[12].sub_widgets[4].default_value == true,
+    "squad list should be visible by default")
+assert(widgets[12].sub_widgets[5].setting_id == "hud_opacity",
+    "tactical HUD should expose one shared opacity control")
 
 local function check_localization(widget)
     assert(localization[widget.setting_id], "missing setting localization: " .. widget.setting_id)
@@ -161,12 +207,13 @@ local function check_localization(widget)
     for _, child in ipairs(widget.sub_widgets or {}) do check_localization(child) end
 end
 
-for _, widget in ipairs(widgets) do check_localization(widget) end
+for _, widget in ipairs(categories) do check_localization(widget) end
 local percentage_labels = {
     aim_fov_opacity = "FOV Circle Opacity (%)",
     stamina_reserve = "Push Stamina Reserve (%)",
     peril_target = "Peril Safety Target (%)",
     heat_target = "Heat Safety Target (%)",
+    hud_opacity = "Tactical HUD Opacity (%)",
 }
 for key, expected in pairs(percentage_labels) do
     local ok, formatted = pcall(string.format, localization[key].en)

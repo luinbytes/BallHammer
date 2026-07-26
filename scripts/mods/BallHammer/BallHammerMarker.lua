@@ -176,7 +176,7 @@ template.update_function = function(parent, ui_renderer, widget, marker)
         marker.remove = true
         return
     end
-    if not mod.enabled or not mod.get_enable_nameplates() then
+    if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_nameplates() then
         widget.visible = false
         return
     end
