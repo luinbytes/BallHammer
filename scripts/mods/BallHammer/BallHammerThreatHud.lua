@@ -322,6 +322,12 @@ local function unit_position(unit)
     return alive(unit) and Unit.world_position(unit, 1) or nil
 end
 
+local function boxed_position(box)
+    if not box then return nil end
+    local ok, position = pcall(box.unbox, box)
+    return ok and position or nil
+end
+
 local function extension(unit, name)
     return unit and ScriptUnit.has_extension(unit, name) or nil
 end
@@ -423,8 +429,7 @@ function BallHammerThreatHud:_refresh_threats(range)
     local source = active_threat.source
     local position = source and HEALTH_ALIVE and HEALTH_ALIVE[source] and unit_position(source)
     if not source and active_threat.danger_position then
-        local ok, value = pcall(function() return active_threat.danger_position:unbox() end)
-        if ok then position = value end
+        position = boxed_position(active_threat.danger_position)
     end
     if not position then return end
 
@@ -434,7 +439,7 @@ function BallHammerThreatHud:_refresh_threats(range)
     local candidate = candidates[1] or {}
     candidates[1] = candidate
     candidate.unit = source
-    candidate.position = source and nil or position
+    candidate.position_box = source and nil or active_threat.danger_position
     candidate.label = string.format("%s %dm", name, math.floor(distance + 0.5))
     selected[1] = candidate
 end
@@ -465,7 +470,8 @@ function BallHammerThreatHud:_update_compass(visible_compass)
     local count = 0
     for i = 1, #self._selected_threats do
         local candidate = self._selected_threats[i]
-        local position = candidate.position or unit_position(candidate.unit)
+        local position = candidate.position_box and boxed_position(candidate.position_box)
+            or unit_position(candidate.unit)
         if position then
             local delta = position - camera_position
             local height = delta.z

@@ -60,6 +60,7 @@ end
 
 local vector_mt = {
     __sub = function(a, b)
+        assert(not a.stale and not b.stale, "stale Vector3 reused across frames")
         return setmetatable({ x = a.x - b.x, y = a.y - b.y, z = a.z - b.z }, vector_mt)
     end,
 }
@@ -225,13 +226,23 @@ assert(not element._widgets_by_name.compass_threat_1.content.visible,
     "dead enemies should leave the threat compass before their unit despawns")
 
 threat_data[threat_unit] = nil
+local grenade_positions = {}
+local function grenade_position()
+    local position = vector(8, 6, 0)
+    grenade_positions[#grenade_positions + 1] = position
+    return position
+end
 active_threat = {
     kind = "grenade",
-    danger_position = { unbox = function() return vector(8, 6, 0) end },
+    danger_position = { unbox = grenade_position },
 }
 element:update(0.016, 1.56, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.content.text:find("GRENADE", 1, true),
     "committed position-only threats should remain visible on the compass")
+for i = 1, #grenade_positions do grenade_positions[i].stale = true end
+element:update(0.016, 1.6, nil, {}, nil)
+assert(element._widgets_by_name.compass_threat_1.content.visible,
+    "position-only threats must unbox a fresh Vector3 every frame")
 
 local unmapped_threat = {}
 positions[unmapped_threat] = vector(4, 6, 0)
