@@ -1655,10 +1655,10 @@ local function replicated_target(unit)
     return target_id and unit_spawner and unit_spawner:unit(target_id) or nil
 end
 
-local function threat_target(scratchpad, blackboard)
+local function threat_target(scratchpad, blackboard, source)
     local perception = scratchpad and scratchpad.perception_component
         or blackboard and blackboard.perception
-    return perception and perception.target_unit
+    return perception and perception.target_unit or source and replicated_target(source)
 end
 
 local function set_threat_marker(threat, text)
@@ -1995,7 +1995,7 @@ end
 
 mod:hook_safe("BtShootNetAction", "_start_shooting", function(self, unit, scratchpad)
     register_threat(
-        "trapper", unit, threat_target(scratchpad), "disabling",
+        "trapper", unit, threat_target(scratchpad, nil, unit), "disabling",
         survival_t, survival_t + 0.2, nil, "shooting"
     )
 end)
@@ -2004,7 +2004,7 @@ mod:hook_safe("BtMutantChargerChargeAction", "_start_charging", function(
     self, unit, scratchpad, action_data, t
 )
     register_threat(
-        "mutant", unit, threat_target(scratchpad), "disabling", t, t + 0.45, nil, "charging"
+        "mutant", unit, threat_target(scratchpad, nil, unit), "disabling", t, t + 0.45, nil, "charging"
     )
 end)
 
@@ -2012,7 +2012,7 @@ mod:hook_safe("BtSniperShootAction", "_start_shooting", function(
     self, unit, t, scratchpad
 )
     register_threat(
-        "sniper", unit, threat_target(scratchpad), "lethal", t, t + 0.15, nil, "shooting"
+        "sniper", unit, threat_target(scratchpad, nil, unit), "lethal", t, t + 0.15, nil, "shooting"
     )
 end)
 
@@ -2022,7 +2022,7 @@ mod:hook_safe("BtShootLiquidBeamAction", "_start_shooting", function(
     local danger_position = scratchpad and scratchpad.current_aim_position
         and scratchpad.current_aim_position:unbox()
     register_threat(
-        "flamer", unit, threat_target(scratchpad), "lethal", t, t + 0.25,
+        "flamer", unit, threat_target(scratchpad, nil, unit), "lethal", t, t + 0.25,
         danger_position, "shooting"
     )
 end)
@@ -2034,7 +2034,7 @@ mod:hook_safe("BtGrenadierThrowAction", "_throw_grenade", function(
     local danger_position = throw_position and throw_direction
         and throw_position + throw_direction * 10 or throw_position
     register_threat(
-        "grenade", unit, threat_target(scratchpad, blackboard), "lethal",
+        "grenade", unit, threat_target(scratchpad, blackboard, unit), "lethal",
         t, t + 0.45, danger_position, "projectile_spawned"
     )
 end)

@@ -1927,6 +1927,29 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 )
 input_handler._frame = 145
 parse_network_input(39)
+replicated_mutant_hook = {}
+units[replicated_mutant_hook] = {
+    breed_data = {
+        name = "cultist_mutant",
+        base_height = 2.4,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+}
+HEALTH_ALIVE[replicated_mutant_hook] = true
+set_replicated_fields(replicated_mutant_hook, { target_unit_id = 1 })
+hooks["HealthExtension.init"](nil, nil, replicated_mutant_hook)
+hooks["BtMutantChargerChargeAction._start_charging"](
+    {}, replicated_mutant_hook, {}, nil, 14.55
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 14.56, 146
+)
+assert((mod.get_threat_indicator() or ""):find("DODGE", 1, true),
+    "replicated specialist targets should produce a threat marker when client scratchpad data is absent")
+HEALTH_ALIVE[replicated_mutant_hook] = false
+hooks["OutlineSystem.on_remove_extension"]({}, replicated_mutant_hook, nil)
 multiplayer_rager = {}
 units[multiplayer_rager] = {
     breed_data = {
