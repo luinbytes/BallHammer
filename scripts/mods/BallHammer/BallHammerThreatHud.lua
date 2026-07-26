@@ -7,10 +7,10 @@ local PlayerUnitVisualLoadout = require(
 local Ammo = require("scripts/utilities/ammo")
 local mod = get_mod("BallHammer")
 
-local MAX_THREATS = 1
+local MAX_THREATS = 4
 local MAX_PLAYERS = 4
 local COMPASS_WIDTH = 520
-local COMPASS_HALF = COMPASS_WIDTH * 0.5 - 24
+local COMPASS_HALF = COMPASS_WIDTH * 0.5 - 64
 local THREAT_SCAN_INTERVAL = 0.1
 local STATUS_INTERVAL = 0.1
 local PLAYER_INTERVAL = 0.25
@@ -64,7 +64,7 @@ local scenegraph = {
     },
     compass = {
         parent = "screen",
-        size = { COMPASS_WIDTH, 58 },
+        size = { COMPASS_WIDTH, 42 },
         vertical_alignment = "top",
         horizontal_alignment = "center",
         position = { 0, 86, 5 },
@@ -97,7 +97,7 @@ end
 for i = 1, MAX_THREATS do
     scenegraph["compass_threat_" .. i] = {
         parent = "compass",
-        size = { 100, 18 },
+        size = { 108, 28 },
         vertical_alignment = "center",
         horizontal_alignment = "center",
         position = { 0, 0, 3 },
@@ -141,26 +141,22 @@ local widgets = {
             pass_type = "rect",
             visibility_function = visible,
             style_id = "background",
-            style = rect({ 150, 5, 8, 12 }, { 0, 0, 0 }, { COMPASS_WIDTH, 58 }),
-        },
-        {
-            pass_type = "rect",
-            visibility_function = visible,
-            style_id = "line",
-            style = rect({ 180, 150, 160, 170 }, { 0, 0, 1 }, { COMPASS_WIDTH - 16, 1 }),
-        },
-        {
-            pass_type = "rect",
-            visibility_function = visible,
-            style_id = "center",
-            style = rect({ 255, 235, 226, 168 }, { 0, 0, 2 }, { 2, 18 }),
+            style = rect({ 130, 6, 9, 13 }, { 0, 0, 0 }, { COMPASS_WIDTH, 42 }),
         },
         {
             pass_type = "text",
-            value = "THREATS",
+            value = "^",
             visibility_function = visible,
-            style_id = "label",
-            style = text_style(10, "center", { 210, 205, 210, 215 }, { 0, -22, 2 }),
+            style_id = "heading",
+            style = text_style(11, "center", { 220, 235, 226, 168 }, { 0, 14, 2 }),
+        },
+        {
+            pass_type = "text",
+            value_id = "summary",
+            value = "",
+            visibility_function = visible,
+            style_id = "summary",
+            style = text_style(9, "left", { 190, 170, 180, 190 }, { 10, -13, 2 }),
         },
     }, "compass"),
     status_header = UIWidget.create_definition({
@@ -169,6 +165,12 @@ local widgets = {
             visibility_function = visible,
             style_id = "background",
             style = rect({ 190, 6, 9, 13 }, { 0, 0, 0 }, { 260, 24 }),
+        },
+        {
+            pass_type = "rect",
+            visibility_function = visible,
+            style_id = "accent",
+            style = rect({ 255, 235, 226, 168 }, { 0, 0, 1 }, { 3, 22 }),
         },
         {
             pass_type = "text",
@@ -189,7 +191,7 @@ local widgets = {
             pass_type = "rect",
             visibility_function = visible,
             style_id = "accent",
-            style = rect({ 255, 235, 226, 168 }, { -148, 0, 1 }, { 3, 22 }),
+            style = rect({ 255, 235, 226, 168 }, { 0, 0, 1 }, { 3, 22 }),
         },
         {
             pass_type = "text",
@@ -208,6 +210,12 @@ for i = 1, 5 do
             visibility_function = visible,
             style_id = "background",
             style = rect({ 150, 7, 10, 14 }, { 0, 0, 0 }, { 260, 22 }),
+        },
+        {
+            pass_type = "rect",
+            visibility_function = visible,
+            style_id = "accent",
+            style = rect({ 255, 128, 137, 148 }, { 0, 0, 1 }, { 3, 20 }),
         },
         {
             pass_type = "text",
@@ -239,10 +247,11 @@ end
 for i = 1, MAX_THREATS do
     widgets["compass_threat_" .. i] = UIWidget.create_definition({
         {
-            pass_type = "rect",
+            pass_type = "text",
+            value = "|",
             visibility_function = visible,
             style_id = "pip",
-            style = rect({ 255, 255, 194, 70 }, { 0, 8, 1 }, { 2, 8 }),
+            style = text_style(12, "center", { 255, 255, 82, 82 }, { 0, 10, 1 }),
         },
         {
             pass_type = "text",
@@ -250,7 +259,15 @@ for i = 1, MAX_THREATS do
             value = "",
             visibility_function = visible,
             style_id = "text",
-            style = text_style(9, "center", { 255, 255, 194, 70 }, { 0, -3, 2 }),
+            style = text_style(10, "center", { 255, 255, 225, 225 }, { 0, -5, 2 }),
+        },
+        {
+            pass_type = "text",
+            value_id = "distance",
+            value = "",
+            visibility_function = visible,
+            style_id = "distance",
+            style = text_style(8, "center", { 220, 170, 180, 190 }, { 0, 6, 2 }),
         },
     }, "compass_threat_" .. i)
 end
@@ -267,7 +284,7 @@ for i = 1, MAX_PLAYERS do
             pass_type = "rect",
             visibility_function = visible,
             style_id = "accent",
-            style = rect({ 255, 105, 220, 145 }, { -148, 0, 1 }, { 3, 36 }),
+            style = rect({ 255, 105, 220, 145 }, { 0, 0, 1 }, { 3, 36 }),
         },
         {
             pass_type = "text",
@@ -275,7 +292,7 @@ for i = 1, MAX_PLAYERS do
             value = "",
             visibility_function = visible,
             style_id = "name",
-            style = text_style(11, "left", { 255, 235, 238, 241 }, { 9, -8, 2 }),
+            style = text_style(12, "left", { 255, 255, 255, 255 }, { 9, -8, 2 }),
         },
         {
             pass_type = "text",
@@ -283,7 +300,7 @@ for i = 1, MAX_PLAYERS do
             value = "",
             visibility_function = visible,
             style_id = "class",
-            style = text_style(9, "right", { 220, 170, 180, 190 }, { -9, -8, 2 }),
+            style = text_style(10, "right", { 255, 215, 225, 235 }, { -9, -8, 2 }),
         },
         {
             pass_type = "text",
@@ -291,7 +308,7 @@ for i = 1, MAX_PLAYERS do
             value = "",
             visibility_function = visible,
             style_id = "stats",
-            style = text_style(9, "left", { 235, 190, 198, 205 }, { 9, 8, 2 }),
+            style = text_style(10, "left", { 255, 245, 245, 245 }, { 9, 8, 2 }),
         },
         {
             pass_type = "text",
@@ -299,7 +316,7 @@ for i = 1, MAX_PLAYERS do
             value = "",
             visibility_function = visible,
             style_id = "state",
-            style = text_style(9, "right", { 255, 105, 220, 145 }, { -9, 8, 2 }),
+            style = text_style(10, "right", { 255, 105, 220, 145 }, { -9, 8, 2 }),
         },
     }, "player_" .. i)
 end
@@ -369,10 +386,15 @@ function BallHammerThreatHud:_apply_opacity(opacity)
     threat.accent.color[1] = math.floor(255 * alpha)
     threat.text.text_color[1] = math.floor(255 * alpha)
     local compass = self._widgets_by_name.compass.style
-    compass.background.color[1] = math.floor(150 * alpha)
-    compass.line.color[1] = math.floor(180 * alpha)
-    compass.center.color[1] = math.floor(255 * alpha)
-    compass.label.text_color[1] = math.floor(210 * alpha)
+    compass.background.color[1] = math.floor(130 * alpha)
+    compass.heading.text_color[1] = math.floor(220 * alpha)
+    compass.summary.text_color[1] = math.floor(190 * alpha)
+    for i = 1, MAX_THREATS do
+        local style = self._widgets_by_name["compass_threat_" .. i].style
+        style.pip.text_color[1] = math.floor(255 * alpha)
+        style.text.text_color[1] = math.floor(255 * alpha)
+        style.distance.text_color[1] = math.floor(220 * alpha)
+    end
     for _, name in ipairs({ "status_header", "player_header" }) do
         local style = self._widgets_by_name[name].style
         style.background.color[1] = math.floor(190 * alpha)
@@ -382,6 +404,7 @@ function BallHammerThreatHud:_apply_opacity(opacity)
     for i = 1, 5 do
         local style = self._widgets_by_name["status_" .. i].style
         style.background.color[1] = math.floor(150 * alpha)
+        style.accent.color[1] = math.floor(255 * alpha)
         style.label.text_color[1] = math.floor(255 * alpha)
         style.key.text_color[1] = math.floor(255 * alpha)
         style.state.text_color[1] = math.floor(255 * alpha)
@@ -391,8 +414,8 @@ function BallHammerThreatHud:_apply_opacity(opacity)
         style.background.color[1] = math.floor(155 * alpha)
         style.accent.color[1] = math.floor(255 * alpha)
         style.name.text_color[1] = math.floor(255 * alpha)
-        style.class.text_color[1] = math.floor(220 * alpha)
-        style.stats.text_color[1] = math.floor(235 * alpha)
+        style.class.text_color[1] = math.floor(245 * alpha)
+        style.stats.text_color[1] = math.floor(245 * alpha)
         style.state.text_color[1] = math.floor(255 * alpha)
     end
 end
@@ -413,6 +436,7 @@ function BallHammerThreatHud:_refresh_status(visible_status)
         widget.content.key = row.key
         widget.content.state = row.state
         local color = TONE_COLORS[row.tone] or TONE_COLORS.idle
+        set_color(widget.style.accent.color, color, self._opacity_alpha or 1)
         set_color(widget.style.state.text_color, color, self._opacity_alpha or 1)
     end
 end
@@ -420,28 +444,62 @@ end
 function BallHammerThreatHud:_refresh_threats(range)
     local camera = self._parent and self._parent.player_camera and self._parent:player_camera()
     local camera_position = camera and ScriptCamera.position(camera)
-    local _, active_threat = mod.get_hud_threats()
+    local threats, active_threat = mod.get_hud_threats()
     local candidates = self._threat_candidates
     local selected = self._selected_threats
-    selected[1] = nil
-    if not camera_position or not active_threat then return end
+    for i = #candidates, 1, -1 do candidates[i] = nil end
+    for i = #selected, 1, -1 do selected[i] = nil end
+    if not camera_position then return end
 
-    local source = active_threat.source
-    local position = source and HEALTH_ALIVE and HEALTH_ALIVE[source] and unit_position(source)
-    if not source and active_threat.danger_position then
-        position = boxed_position(active_threat.danger_position)
+    local active_source = active_threat and active_threat.source
+    local has_active_source = false
+    for unit, data in pairs(threats or {}) do
+        if (data.flag == "SPECIAL" or data.flag == "BOSS") and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
+            local position = unit_position(unit)
+            local distance = position and Vector3.length(position - camera_position)
+            if distance and distance <= range then
+                has_active_source = has_active_source or active_source == unit
+                candidates[#candidates + 1] = {
+                    active = active_source == unit,
+                    distance = distance,
+                    label = string.format("%s %dm", tostring(data.name):upper(), math.floor(distance + 0.5)),
+                    unit = unit,
+                }
+            end
+        end
     end
-    if not position then return end
 
-    local distance = Vector3.length(position - camera_position)
-    if distance > range then return end
-    local name = tostring(active_threat.kind or "THREAT"):gsub("_", " "):upper()
-    local candidate = candidates[1] or {}
-    candidates[1] = candidate
-    candidate.unit = source
-    candidate.position_box = source and nil or active_threat.danger_position
-    candidate.label = string.format("%s %dm", name, math.floor(distance + 0.5))
-    selected[1] = candidate
+    if active_source and not has_active_source and HEALTH_ALIVE and HEALTH_ALIVE[active_source] then
+        local position = unit_position(active_source)
+        local distance = position and Vector3.length(position - camera_position)
+        if distance and distance <= range then
+            candidates[#candidates + 1] = {
+                active = true,
+                distance = distance,
+                label = string.format("%s %dm", tostring(active_threat.kind or "THREAT"):gsub("_", " "):upper(),
+                    math.floor(distance + 0.5)),
+                unit = active_source,
+            }
+        end
+    elseif active_threat and not active_source and active_threat.danger_position then
+        local position = boxed_position(active_threat.danger_position)
+        local distance = position and Vector3.length(position - camera_position)
+        if distance and distance <= range then
+            candidates[#candidates + 1] = {
+                active = true,
+                distance = distance,
+                label = string.format("%s %dm", tostring(active_threat.kind or "THREAT"):gsub("_", " "):upper(),
+                    math.floor(distance + 0.5)),
+                position_box = active_threat.danger_position,
+            }
+        end
+    end
+
+    table.sort(candidates, function(a, b)
+        if a.active ~= b.active then return a.active end
+        return a.distance < b.distance
+    end)
+    for i = 1, math.min(#candidates, MAX_THREATS) do selected[i] = candidates[i] end
 end
 
 function BallHammerThreatHud:_update_compass(visible_compass)
@@ -486,10 +544,13 @@ function BallHammerThreatHud:_update_compass(visible_compass)
             end
             item.candidate = candidate
             item.x = angle / math.pi * COMPASS_HALF
+            item.focused = candidate == self._selected_threats[1]
             item.height = height
         end
     end
     for i = count + 1, #display do display[i] = nil end
+    table.sort(display, function(a, b) return a.x < b.x end)
+    background.content.summary = string.format("%d THREAT%s", count, count == 1 and "" or "S")
 
     for i = 1, count do
         local item = display[i]
@@ -499,18 +560,26 @@ function BallHammerThreatHud:_update_compass(visible_compass)
         if widget.content.base_label ~= candidate.label or widget.content.arrow ~= arrow then
             widget.content.base_label = candidate.label
             widget.content.arrow = arrow
-            widget.content.text = candidate.label .. arrow
+            local name, distance = candidate.label:match("^(.*) (%d+m)$")
+            widget.content.name = (name or candidate.label) .. arrow
+            widget.content.range = distance or ""
         end
+        widget.content.text = item.focused and widget.content.name or ""
+        widget.content.distance = item.focused and widget.content.range or ""
         widget.content.visible = true
         widget.offset[1] = item.x
         widget.offset[2] = 0
-        local source = TONE_COLORS.danger
+        widget.style.text.offset[1] = 0
+        widget.style.distance.offset[1] = 0
+        local source = candidate.active and TONE_COLORS.active or TONE_COLORS.danger
         local center_fade = math.abs(item.x) < COMPASS_HALF * 0.25 and 0.72 or 1
         local edge_fade = 1 - math.max(0, math.abs(item.x) / COMPASS_HALF - 0.8) * 2.5
         local alpha = math.max(0.35, center_fade * edge_fade)
             * (self._opacity_alpha or 1)
-        set_color(widget.style.pip.color, source, alpha)
-        set_color(widget.style.text.text_color, source, alpha)
+        set_color(widget.style.pip.text_color, source, alpha)
+        set_color(widget.style.text.text_color,
+            { 255, 255, 225, 225 }, alpha)
+        set_color(widget.style.distance.text_color, { 220, 170, 180, 190 }, alpha)
     end
     for i = count + 1, MAX_THREATS do
         self._widgets_by_name["compass_threat_" .. i].content.visible = false

@@ -118,6 +118,11 @@ local settings = {
     rage_distance = 120,
     rage_smoothness = 10,
     enable_auto_fire = true,
+    rapid_fire_activation = "custom",
+    rapid_fire_key = {},
+    rapid_fire_speed = 2,
+    enable_quick_reload = false,
+    quick_reload_speed = 2,
     enable_no_recoil = false,
     enable_no_spread = false,
     enable_companion_target = false,
@@ -157,6 +162,15 @@ local recoil_api = {
         recoil_calls = recoil_calls + 1
     end,
 }
+recoil_api.action_handler = {
+    _calculate_time_scale = function() return 1 end,
+}
+recoil_api.action_shoot = {
+    _fire_rate_settings = function()
+        return { fire_time = 0.2, auto_fire_time = 0.1, marker = "native" }
+    end,
+    _scale_auto_fire_time_with_buffs = function(_, value) return value end,
+}
 local director_profile = { name = "ballhammer_test_profile", targets = { {} } }
 local director_positions = {}
 local director_actor
@@ -164,6 +178,12 @@ local prefer_director_head = false
 local director_no_candidates = false
 package.preload["scripts/utilities/recoil"] = function()
     return recoil_api
+end
+package.preload["scripts/utilities/action/action_handler"] = function()
+    return recoil_api.action_handler
+end
+package.preload["scripts/extension_systems/weapon/actions/action_shoot"] = function()
+    return recoil_api.action_shoot
 end
 package.preload["scripts/utilities/action/action"] = function()
     return { damage_template = function() return director_profile end }
@@ -631,6 +651,36 @@ assert(mod.get_hud_status_rows()[2].key == "MOUSE5",
 settings.trigger_activation = "off"
 mod.on_setting_changed("trigger_activation")
 
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_hit_scan" }
+) == 1, "rapid fire should leave native fire timing unchanged until its bind is held")
+mod.rapid_fire_held(true)
+settings.rapid_fire_speed = 3
+mod.on_setting_changed("rapid_fire_speed")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_hit_scan" }
+) == 3, "rapid fire speed should scale manual shot recovery while its bind is held")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_pellets" }
+) == 3, "rapid fire should scale all shooting action timing while its bind is held")
+assert(math.abs(recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).fire_time
+    - 0.2 / 3) < 0.0001
+    and math.abs(recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).auto_fire_time
+        - 0.1 / 3) < 0.0001
+    and recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).marker == "native",
+    "rapid fire should scale local fire-rate settings while its bind is held")
+mod.rapid_fire_held(false)
+assert(recoil_api.action_shoot._fire_rate_settings({ _player_unit = {} }).auto_fire_time == 0.1,
+    "rapid fire should not alter other players' weapon intervals")
+settings.enable_quick_reload = true
+settings.quick_reload_speed = 3
+mod.on_setting_changed("enable_quick_reload")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "reload_state" }
+) == 3 and recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "reload_shotgun" }
+) == 3, "quick reload speed should scale native reload timing and animation speed")
+
 local rotation = {}
 assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread({ _unit = player_unit }, rotation).spread == rotation,
     "BallHammer should not override weapon spread")
@@ -652,8 +702,8 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.target_style_spread(
 assert(randomized_spread_calls == 2 and target_style_spread_calls == 2,
     "no spread must still advance Darktide's deterministic spread state")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, player_unit)
-assert(recoil_calls == 2,
-    "no recoil must preserve native recoil state for multiplayer prediction")
+assert(recoil_calls == 1,
+    "no recoil must stop local recoil from accumulating between shots")
 local camera_pitch, camera_yaw = recoil_api.first_person_offset(
     nil, local_recoil_component
 )
@@ -665,10 +715,10 @@ local remote_camera_pitch, remote_camera_yaw = recoil_api.first_person_offset(
 assert(remote_camera_pitch == 0.3 and remote_camera_yaw == -0.1,
     "no recoil must preserve non-local camera recoil on a multiplayer host")
 local weapon_pitch, weapon_yaw = recoil_api.weapon_offset(
-    nil, { pitch_offset = 0.4, yaw_offset = -0.2 }
+    nil, local_recoil_component
 )
-assert(weapon_pitch == 0.4 and weapon_yaw == -0.2,
-    "no recoil must preserve the weapon offset used by multiplayer shot prediction")
+assert(weapon_pitch == 0 and weapon_yaw == 0,
+    "no recoil should suppress the local weapon offset so shots follow the aimed bone")
 assert(orientation.yaw == weapon_orientation_yaw and orientation.pitch == weapon_orientation_pitch,
     "weapon suppression must never compensate through player orientation")
 local remote_weapon_unit = {}
@@ -676,7 +726,7 @@ assert(CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
     { _unit = remote_weapon_unit }, rotation
 ).spread == rotation, "no spread must not alter remote weapon prediction")
 recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, remote_weapon_unit)
-assert(recoil_calls == 3, "no recoil must not alter remote weapon prediction")
+assert(recoil_calls == 2, "no recoil must not alter remote weapon prediction")
 
 hooks["HudElementWorldMarkers.init"](live_world_markers)
 assert(aim_marker_events[1] and aim_marker_events[1].marker_name == "ballhammer_aim_marker",
@@ -1324,6 +1374,13 @@ assert(parse_network_input(8),
 input_values.action_one_hold = false
 assert(not parse_network_input(9),
     "releasing mouse one should stop and reset semi-automatic fire")
+shot_ready = true
+weapon_action_component.start_t = 1.45
+mod.rapid_fire_held(true)
+rapid_inputs = { parse_network_input(9.5) }
+assert(not rapid_inputs[1] and not rapid_inputs[4],
+    "rapid-fire bind should not generate shots without manual fire input")
+mod.rapid_fire_held(false)
 
 settings.aim_activation = "off"
 settings.trigger_activation = "custom"
@@ -1775,7 +1832,7 @@ disabling_unit = nil
 disabling_type = "none"
 
 for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
-local trapper = {}
+trapper = {}
 units[trapper] = {
     breed_data = {
         name = "renegade_netgunner",

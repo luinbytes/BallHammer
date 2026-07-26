@@ -382,6 +382,49 @@ local data = {
                         default_value = true,
                     },
                     {
+                        setting_id = "rapid_fire_activation",
+                        type = "dropdown",
+                        default_value = "custom",
+                        options = {
+                            { text = "aim_activation_off", value = "off" },
+                            { text = "aim_activation_left", value = "left_mouse" },
+                            { text = "aim_activation_right", value = "right_mouse" },
+                            { text = "aim_activation_both", value = "both_mouse" },
+                            { text = "aim_activation_custom", value = "custom", show_widgets = { 1 } },
+                        },
+                        sub_widgets = {
+                            {
+                                setting_id = "rapid_fire_key",
+                                type = "keybind",
+                                keybind_trigger = "held",
+                                keybind_type = "function_call",
+                                default_value = {},
+                                function_name = "rapid_fire_held",
+                            },
+                        },
+                    },
+                    {
+                        setting_id = "rapid_fire_speed",
+                        type = "numeric",
+                        default_value = 2,
+                        range = { 1.1, 10 },
+                        decimals_number = 1,
+                    },
+                    {
+                        setting_id = "enable_quick_reload",
+                        type = "checkbox",
+                        default_value = false,
+                        sub_widgets = {
+                            {
+                                setting_id = "quick_reload_speed",
+                                type = "numeric",
+                                default_value = 2,
+                                range = { 1.1, 5 },
+                                decimals_number = 1,
+                            },
+                        },
+                    },
+                    {
                         setting_id = "enable_no_recoil",
                         type = "checkbox",
                         default_value = false,

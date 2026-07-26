@@ -95,6 +95,11 @@ return {
 
     weapon_settings = { en = "Weapon" },
     enable_auto_fire = { en = "Automatic Semi-Auto Fire" },
+    rapid_fire_activation = { en = "Rapid Fire Activation" },
+    rapid_fire_key = { en = "Rapid Fire" },
+    rapid_fire_speed = { en = "Rapid Fire Speed (x)" },
+    enable_quick_reload = { en = "Quick Reload" },
+    quick_reload_speed = { en = "Quick Reload Speed (x)" },
     enable_no_recoil = { en = "No Recoil" },
     enable_no_spread = { en = "No Spread" },
 

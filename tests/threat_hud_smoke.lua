@@ -174,22 +174,29 @@ assert(element._widgets_by_name.threat.content.visible
 assert(element._widgets_by_name.status_header.content.visible
     and element._widgets_by_name.status_2.content.state == "FIRING",
     "system panel should render configured keys and live states")
-assert(element._widgets_by_name.status_header.style.accent == nil
-    and element._widgets_by_name.status_1.style.accent == nil,
-    "system status rows should not render decorative state ticks")
+assert(element._widgets_by_name.status_header.style.accent.offset[1] == 0
+    and element._widgets_by_name.status_1.style.accent.offset[1] == 0,
+    "system panel accents should stay attached to their panels")
 assert(element._widgets_by_name.compass.content.visible
+    and element._widgets_by_name.compass.content.summary == "1 THREAT"
     and element._widgets_by_name.compass_threat_1.content.visible
     and element._widgets_by_name.compass_threat_1.offset[1] > 0
-    and element._widgets_by_name.compass_threat_1.content.text:find("MUTANT", 1, true),
-    "threat compass should project a named threat to its camera-relative bearing")
+    and element._widgets_by_name.compass_threat_1.content.text:find("MUTANT", 1, true)
+    and element._widgets_by_name.compass_threat_1.content.distance == "14m"
+    and element._widgets_by_name.compass_threat_1.style.pip.text_color[3] == 194,
+    "threat compass should separate a readable name and distance on a directional ribbon")
+assert(element._widgets_by_name.compass.style.accent == nil
+    and element._widgets_by_name.compass.style.line == nil
+    and element._widgets_by_name.compass.style.center == nil,
+    "compass panel should not render detached accents or frame-like guide strokes")
 assert(element._widgets_by_name.player_header.content.visible
     and element._widgets_by_name.player_1.content.name == "Veteran"
     and element._widgets_by_name.player_1.content.stats:find("HP 75", 1, true)
     and element._widgets_by_name.player_1.content.stats:find("AMMO 50%%"),
     "squad list should render native health, toughness, ammo, and grenade data")
 assert(element._widgets_by_name.status_1.style.label.text_color[1] == 204
-    and element._widgets_by_name.compass.style.line.color[1] == 144
-    and element._widgets_by_name.player_1.style.stats.text_color[1] == 188,
+    and element._widgets_by_name.compass.style.background.color[1] == 104
+    and element._widgets_by_name.player_1.style.stats.text_color[1] == 196,
     "shared HUD opacity should apply to text, accents, and compass surfaces")
 
 local crowded_units = { {}, {}, {} }
@@ -205,10 +212,15 @@ for i = 1, #crowded_units do
 end
 element:update(0.016, 1.2, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.content.visible
-    and element._widgets_by_name.compass_threat_2 == nil
     and element._widgets_by_name.compass_threat_1.content.text:find("MUTANT", 1, true)
-    and element._widgets_by_name.compass_threat_1.offset[2] == 0,
-    "threat compass should show only the committed threat")
+    and element._widgets_by_name.compass_threat_2.content.visible
+    and element._widgets_by_name.compass_threat_4.content.visible
+    and element._widgets_by_name.compass_threat_2.content.text == ""
+    and element._widgets_by_name.compass.content.summary == "4 THREATS"
+    and element._widgets_by_name.compass_threat_1.style.text.offset[1] == 0
+    and element._widgets_by_name.compass_threat_1.offset[1]
+        == element._widgets_by_name.compass_threat_2.offset[1],
+    "threat compass should label only the focused threat while retaining every true-bearing pip")
 for i = 1, #crowded_units do
     threat_data[crowded_units[i]] = nil
     HEALTH_ALIVE[crowded_units[i]] = false

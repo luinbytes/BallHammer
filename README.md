@@ -20,6 +20,7 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Rage mode that selects visible on-screen targets using danger, range, and crosshair weighting
 - Melee-aware aim range limits mouse-one targeting to enemies inside the current weapon sweep reach
 - Optional timed repeat fire for press-driven, non-automatic weapons whenever mouse one is held
+- Held Rapid Fire has a configurable 1.1x to 10x multiplier; opt-in Quick Reload is capped at 5x
 - Optional local weapon recoil and spread suppression without camera compensation
 - Collision-spaced pickup cards with compact stacking, fixed screen sizing, category accents, distance fading, category presets, custom per-pickup filters, and distinct Med, Concentration, Combat, and Celerity Stimm labels
 - Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects

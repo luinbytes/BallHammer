@@ -125,11 +125,27 @@ assert(widgets[9].sub_widgets[4].setting_id == "heat_target"
 assert(widgets[10].sub_widgets[1].setting_id == "enable_auto_fire"
     and widgets[10].sub_widgets[1].default_value == true,
     "semi-automatic repeat fire should have an independent weapon toggle")
-assert(widgets[10].sub_widgets[2].setting_id == "enable_no_recoil"
-    and widgets[10].sub_widgets[2].default_value == false,
+assert(widgets[10].sub_widgets[2].setting_id == "rapid_fire_activation"
+    and widgets[10].sub_widgets[2].default_value == "custom"
+    and widgets[10].sub_widgets[2].options[4].value == "both_mouse"
+    and widgets[10].sub_widgets[2].sub_widgets[1].function_name == "rapid_fire_held",
+    "rapid fire should support mouse and custom held activation")
+assert(widgets[10].sub_widgets[3].setting_id == "rapid_fire_speed"
+    and widgets[10].sub_widgets[3].range[1] == 1.1
+    and widgets[10].sub_widgets[3].range[2] == 10,
+    "rapid fire should expose a bounded speed multiplier")
+assert(widgets[10].sub_widgets[4].setting_id == "enable_quick_reload"
+    and widgets[10].sub_widgets[4].default_value == false,
+    "quick reload should be an opt-in toggle")
+assert(widgets[10].sub_widgets[4].sub_widgets[1].setting_id == "quick_reload_speed"
+    and widgets[10].sub_widgets[4].sub_widgets[1].range[1] == 1.1
+    and widgets[10].sub_widgets[4].sub_widgets[1].range[2] == 5,
+    "quick reload should expose a bounded speed multiplier")
+assert(widgets[10].sub_widgets[5].setting_id == "enable_no_recoil"
+    and widgets[10].sub_widgets[5].default_value == false,
     "recoil suppression should have an independent weapon toggle")
-assert(widgets[10].sub_widgets[3].setting_id == "enable_no_spread"
-    and widgets[10].sub_widgets[3].default_value == false,
+assert(widgets[10].sub_widgets[6].setting_id == "enable_no_spread"
+    and widgets[10].sub_widgets[6].default_value == false,
     "spread suppression should have an independent weapon toggle")
 assert(widgets[11].sub_widgets[1].setting_id == "enable_companion_target",
     "companion auto-target should have an independent toggle")

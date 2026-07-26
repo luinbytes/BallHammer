@@ -21,6 +21,8 @@ local function optional_require(path)
 end
 
 local Action = optional_require("scripts/utilities/action/action")
+mod._action_handler = optional_require("scripts/utilities/action/action_handler")
+mod._action_shoot = optional_require("scripts/extension_systems/weapon/actions/action_shoot")
 local Armor = optional_require("scripts/utilities/attack/armor")
 local DamageCalculation = optional_require("scripts/utilities/attack/damage_calculation")
 local DamageProfile = optional_require("scripts/utilities/attack/damage_profile")
@@ -360,6 +362,10 @@ local function refresh_settings()
     rage_distance      = mod:get("rage_distance")
     rage_smoothness    = mod:get("rage_smoothness")
     enable_auto_fire  = mod:get("enable_auto_fire")
+    mod._rapid_fire_activation = mod:get("rapid_fire_activation") or "custom"
+    mod._rapid_fire_speed = mod:get("rapid_fire_speed") or 2
+    mod._quick_reload_enabled = mod:get("enable_quick_reload")
+    mod._quick_reload_speed = mod:get("quick_reload_speed") or 2
     enable_no_recoil  = mod:get("enable_no_recoil")
     enable_no_spread  = mod:get("enable_no_spread")
     enable_companion_target = mod:get("enable_companion_target")
@@ -687,6 +693,11 @@ mod.triggerbot_held = function(held)
     end
 end
 
+mod.rapid_fire_held = function(held)
+    mod._rapid_fire_held = held
+    if mod._rapid_fire_activation == "custom" then mod._rapid_fire_active = held end
+end
+
 mod.rage_held = function(held)
     rage_held = held
     if not held and requested_auto_fire_mode == "rage" then
@@ -740,9 +751,17 @@ mod.on_setting_changed = function(setting_id)
         return
     end
 
-    if setting_id == "enable_auto_fire" or setting_id == "enable_no_recoil"
+    if setting_id == "enable_auto_fire" or setting_id == "rapid_fire_activation"
+        or setting_id == "rapid_fire_key" or setting_id == "rapid_fire_speed"
+        or setting_id == "enable_quick_reload"
+        or setting_id == "quick_reload_speed"
+        or setting_id == "enable_no_recoil"
         or setting_id == "enable_no_spread" then
         enable_auto_fire = mod:get("enable_auto_fire")
+        mod._rapid_fire_activation = mod:get("rapid_fire_activation") or "custom"
+        mod._rapid_fire_speed = mod:get("rapid_fire_speed") or 2
+        mod._quick_reload_enabled = mod:get("enable_quick_reload")
+        mod._quick_reload_speed = mod:get("quick_reload_speed") or 2
         enable_no_recoil = mod:get("enable_no_recoil")
         enable_no_spread = mod:get("enable_no_spread")
         return
@@ -2270,6 +2289,9 @@ mod:hook("HumanInputHandler", "_parse_input", function(
     if not player_unit or self._player ~= player or not lookup then return end
 
     physical_action_one_hold = hold_index and input_cache[hold_index][index] == true or false
+    mod._rapid_fire_active = activation_is_held_in_cache(
+        mod._rapid_fire_activation, mod._rapid_fire_held, lookup, input_cache, index
+    )
     local fixed_time_step = Managers.state and Managers.state.game_session
         and Managers.state.game_session.fixed_time_step
     local frame = self._frame
@@ -2383,6 +2405,42 @@ mod:hook_safe("ActionInputParser", "mispredict_happened", function(self)
     end
 end)
 
+if mod._action_handler then
+    mod:hook(mod._action_handler, "_calculate_time_scale", function(func, self, action_settings)
+        local time_scale = func(self, action_settings)
+        local player = Managers.player and Managers.player:local_player(1)
+        if not player or self._unit ~= player.player_unit then return time_scale end
+        local kind = action_settings and action_settings.kind
+        if mod._rapid_fire_active and kind and kind:find("^shoot") then
+            return time_scale * mod._rapid_fire_speed
+        end
+        if mod._quick_reload_enabled and (kind == "reload_state" or kind == "reload_shotgun") then
+            return time_scale * mod._quick_reload_speed
+        end
+        return time_scale
+    end)
+end
+
+if mod._action_shoot then
+    mod:hook(mod._action_shoot, "_fire_rate_settings", function(func, self)
+        local settings = func(self)
+        local player = Managers.player and Managers.player:local_player(1)
+        if not mod._rapid_fire_active
+            or not player or self._player_unit ~= player.player_unit then
+            return settings
+        end
+        local rapid_settings = {}
+        for key, value in pairs(settings) do rapid_settings[key] = value end
+        if rapid_settings.fire_time then
+            rapid_settings.fire_time = rapid_settings.fire_time / mod._rapid_fire_speed
+        end
+        if rapid_settings.auto_fire_time then
+            rapid_settings.auto_fire_time = rapid_settings.auto_fire_time / mod._rapid_fire_speed
+        end
+        return rapid_settings
+    end)
+end
+
 local function suppress_local_spread(self)
     local player = Managers.player and Managers.player:local_player(1)
     return enable_no_spread and player and self._unit == player.player_unit
@@ -2408,16 +2466,27 @@ mod:hook("PlayerUnitWeaponSpreadExtension", "target_style_spread", function(
     return func(self, current_rotation, ...)
 end)
 
-mod:hook(Recoil, "first_person_offset", function(
-    func, recoil_template, read_recoil_component, ...
+mod:hook(Recoil, "add_recoil", function(
+    func, t, recoil_template, recoil_component, recoil_control_component,
+    movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit
 )
+    local player = Managers.player and Managers.player:local_player(1)
+    if enable_no_recoil and player and unit == player.player_unit then return end
+    return func(t, recoil_template, recoil_component, recoil_control_component,
+        movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit)
+end)
+
+local function local_recoil_offset(func, recoil_template, read_recoil_component, ...)
     local player = Managers.player and Managers.player:local_player(1)
     local first_person = player and player.player_unit
         and ScriptUnit.has_extension(player.player_unit, "first_person_system")
     if enable_no_recoil and first_person
         and read_recoil_component == first_person._recoil_component then return 0, 0 end
     return func(recoil_template, read_recoil_component, ...)
-end)
+end
+
+mod:hook(Recoil, "first_person_offset", local_recoil_offset)
+mod:hook(Recoil, "weapon_offset", local_recoil_offset)
 
 mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, unit, dt, t, frame)
     if not dt or dt <= 0 then return end
@@ -2549,6 +2618,8 @@ end)
 local function teardown_runtime(for_reload)
     mod.enabled = false
     aimbot_held, triggerbot_held, rage_held = false, false, false
+    mod._rapid_fire_held = false
+    mod._rapid_fire_active = false
     physical_action_one_hold = nil
     requested_auto_fire_mode, requested_auto_fire_until = nil, nil
     requested_defense, requested_vent = nil, nil
