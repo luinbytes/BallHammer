@@ -189,6 +189,7 @@ local auto_whistle_pending_target = nil
 local auto_whistle_used_target = nil
 local auto_whistle_hold_until = nil
 local next_smart_target_refresh_t = 0
+local next_preview_scan_t = 0
 local active_threat = nil
 local requested_defense = nil
 local requested_vent = nil
@@ -1539,7 +1540,7 @@ end
 
 local function select_aim_target(
     physics_world, origin, camera_forward, distance_limit, fov, dt,
-    preferred_target, mode, on_screen
+    preferred_target, mode, on_screen, allow_scan
 )
     mode = mode or "aim"
     if locked_mode and locked_mode ~= mode then clear_aim_lock() end
@@ -1557,7 +1558,7 @@ local function select_aim_target(
     end
 
     local best_unit, best_position, best_score, best_distance
-    if not locked_target then
+    if not locked_target and allow_scan ~= false then
         if mode == "aim" and preferred_target and aim_target_map[preferred_target] then
             local position, score, visible, distance = target_metrics(
                 physics_world, preferred_target, origin, camera_forward,
@@ -2448,22 +2449,28 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     local camera_forward = Quaternion.forward(first_person.rotation)
     local on_screen = function(position) return self:is_within_default_view(position) end
     if not mode then
-        clear_aim_lock()
         local preview_mode = aim_activation ~= "off" and "aim"
             or trigger_activation ~= "off" and "trigger"
         if not preview_mode then
+            clear_aim_lock()
             set_aim_preview(nil, nil, nil, nil)
             return
+        end
+        if t < next_preview_scan_t - 1 then next_preview_scan_t = 0 end
+        local scan_preview = t >= next_preview_scan_t
+        if scan_preview then
+            clear_aim_lock()
+            next_preview_scan_t = t + 0.1
         end
         local preview_fov = preview_mode == "trigger" and trigger_fov or aim_fov
         local preview_position, _, preview_target, preview_distance = select_aim_target(
             physics_world, visibility_origin, camera_forward,
-            aim_distance, preview_fov, dt, nil, "preview", on_screen
+            aim_distance, preview_fov, dt, nil, "preview", on_screen, scan_preview
         )
         set_aim_preview(preview_target, preview_position, preview_mode, preview_distance)
-        clear_aim_lock()
         return
     end
+    next_preview_scan_t = 0
 
     local preferred_target
     if mode == "aim" and not locked_target then
@@ -2544,6 +2551,7 @@ local function teardown_runtime(for_reload)
     auto_whistle_pending_target = nil
     auto_whistle_used_target = nil
     auto_whistle_hold_until = nil
+    next_preview_scan_t = 0
     clear_aim_lock()
     set_aim_preview(nil, nil, nil, nil)
     clear_active_threat()

@@ -36,10 +36,12 @@ package.preload["scripts/managers/ui/ui_widget"] = function()
 end
 
 local units = {}
+local position_reads = 0
 Unit = {
     has_node = function(unit, name) return units[unit].nodes[name] ~= nil end,
     node = function(_, name) return name end,
     world_position = function(unit, node)
+        position_reads = position_reads + 1
         return node == 1 and units[unit].body or units[unit].nodes[node]
     end,
 }
@@ -52,8 +54,8 @@ local parent = {
 }
 
 local template = dofile("scripts/mods/BallHammer/BallHammerHordeMarker.lua")
-assert(template.check_line_of_sight, "horde ESP should request Darktide's native visibility raycast")
-assert(template.unit_node == "j_head", "horde visibility should raycast to the head instead of the floor")
+assert(not template.check_line_of_sight,
+    "horde ESP should not spend one native visibility raycast per grunt")
 local function widget_at(x)
     local definition = template.create_widget_defintion(template, "pivot")
     local styles = {}
@@ -75,6 +77,10 @@ for i = 1, 4 do
             j_spine = { x = i - 1, y = 0, z = 1, screen_x = screen_x },
             j_leftfoot = { x = i - 1, y = 0, z = 0, screen_x = screen_x - 8 },
             j_rightfoot = { x = i - 1, y = 0, z = 0, screen_x = screen_x + 8 },
+            j_leftarm = { x = i - 1, y = 0, z = 1.4, screen_x = screen_x - 4 },
+            j_leftforearm = { x = i - 1, y = 0, z = 1.2, screen_x = screen_x - 6 },
+            j_rightarm = { x = i - 1, y = 0, z = 1.4, screen_x = screen_x + 4 },
+            j_rightforearm = { x = i - 1, y = 0, z = 1.2, screen_x = screen_x + 6 },
         },
     }
     mod.horde_unit_data[unit] = {
@@ -90,6 +96,8 @@ for i = 1, 4 do
 end
 
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 0.7)
+assert(position_reads <= 24,
+    "horde projection should inspect only the body-extents bones needed by the grouped ESP")
 assert(markers[1].widget.content.draw_box and not markers[1].widget.content.draw_dot,
     "a first-time horde join should begin from the member box")
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[2].widget, markers[2], nil, nil, 0.7)
@@ -101,13 +109,8 @@ template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[2].wi
 assert(markers[2].widget.style.dot.offset[2] == -90,
     "horde dots should use the configured head bone instead of the root below the feet")
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 1)
-markers[1].raycast_initialized = true
-markers[1].raycast_result = false
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 1.5)
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 1.5)
-assert(markers[1].widget.style.top.color[2] == 255 and markers[1].widget.style.top.color[3] == 255 and
-    markers[1].widget.style.top.color[4] == 255 and markers[1].widget.style.dot.color[3] == 255,
-    "visible horde ESP should render white")
 
 units[markers[4].unit].body.x = 20
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 1.516)

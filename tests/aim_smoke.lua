@@ -572,8 +572,10 @@ World = {
     end,
 }
 Actor = { unit = function(actor) return actor.unit end }
+raycast_calls = 0
 PhysicsWorld = {
     raycast = function(world, origin, direction, _, cast_type, ...)
+        raycast_calls = raycast_calls + 1
         assert(world == physics_world, "raycast should use the gameplay physics world")
         local ox, oy, oz = Vector3.to_elements(origin)
         local cx, cy, cz = Vector3.to_elements(hud_camera_position)
@@ -1056,6 +1058,7 @@ assert(preview_target == angular_pick and preview_position,
 local _, _, near_preview_radius = mod.get_aim_preview()
 units[angular_pick].nodes.j_head = Vector3(8, 40, 2.2)
 camera_rotation = Vector3.normalize(Vector3(8, 40, 2.2))
+preview_raycast_calls = raycast_calls
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.905)
 local animated_target, animated_position, far_preview_radius = mod.get_aim_preview()
 local animated_x, animated_y, animated_z = Vector3.to_elements(animated_position)
@@ -1064,12 +1067,30 @@ assert(animated_target == angular_pick and animated_x == 8 and animated_y == 40 
         tostring(animated_target == angular_pick), animated_x or -1, animated_y or -1, animated_z or -1))
 assert(far_preview_radius < near_preview_radius,
     "the visible acquisition circle should shrink with target distance")
+assert(raycast_calls - preview_raycast_calls == 1,
+    "idle preview should update its selected target without rescanning every enemy each frame")
+units[angular_pick].nodes.j_head = Vector3(1, 40, 2.2)
+camera_rotation = Vector3.normalize(Vector3(1, 40, 2.2))
+preview_raycast_calls = raycast_calls
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.9055)
+assert(raycast_calls - preview_raycast_calls == 1 and not mod.get_aim_preview(),
+    "an occluded preview should test only its lock before the next acquisition scan")
+units[angular_pick].nodes.j_head = Vector3(8, 40, 2.2)
+camera_rotation = Vector3.normalize(Vector3(8, 40, 2.2))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.11, 3.9058)
+HEALTH_ALIVE[angular_pick] = false
+preview_raycast_calls = raycast_calls
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.12, 3.906)
+assert(raycast_calls == preview_raycast_calls and not mod.get_aim_preview(),
+    "an invalid preview target should wait for the next scheduled full acquisition scan")
+HEALTH_ALIVE[angular_pick] = true
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.22, 4.01)
 units[angular_pick].nodes.j_head = Vector3(5, 20, 1.8)
 camera_rotation = Vector3.normalize(Vector3(5, 20, 1.8))
 orientation.yaw, orientation.pitch = 0, 0
 smart_direct_target = direct_pick
 held_action = "action_two_hold"
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.91)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.23, 4.02)
 assert(math.abs(orientation.yaw - angular_yaw) < math.abs(orientation.yaw - direct_yaw),
     "aim activation should acquire the same target shown by the idle preview")
 smart_direct_target = nil
@@ -1101,7 +1122,7 @@ for target_unit in pairs(units) do HEALTH_ALIVE[target_unit] = false end
 HEALTH_ALIVE[outside_fov] = true
 assert(mod.get_unit_data(outside_fov), "outside-FOV preview target should remain registered")
 camera_rotation = Vector3.normalize(Vector3(30, 5, 1.8))
-hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0, 3.97)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](first_person_extension, player_unit, 0.1, 0.11, 3.97)
 local outside_preview, _, outside_radius = mod.get_aim_preview()
 assert(outside_preview == outside_fov and outside_radius,
     "idle preview should place the acquisition circle on the closest on-screen target even before acquisition: "
