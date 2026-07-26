@@ -391,8 +391,7 @@ end
 local function activation_is_held(activation, custom_held, input_extension)
     if activation == "custom" then return custom_held end
     if not input_extension then return false end
-    local left_held = physical_action_one_hold
-    if left_held == nil then left_held = input_extension:get("action_one_hold") end
+    local left_held = physical_action_one_hold or input_extension:get("action_one_hold")
     if activation == "left_mouse" then return left_held end
     if activation == "right_mouse" then return input_extension:get("action_two_hold") end
     if activation == "both_mouse" then
@@ -1345,8 +1344,8 @@ local function current_damage_profile(player_unit)
     return profile, lerp_values
 end
 
-local function melee_aim_reach(unit_data)
-    if not physical_action_one_hold then return nil end
+local function melee_aim_reach(unit_data, attack_held)
+    if not attack_held then return nil end
     local inventory = unit_data:read_component("inventory")
     if not inventory or inventory.wielded_slot ~= "slot_primary" then return nil end
     local action = unit_data:read_component("weapon_action")
@@ -2488,7 +2487,9 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         end
     end
     local distance_limit = mode == "rage" and rage_distance or aim_distance
-    local melee_reach = melee_aim_reach(unit_data)
+    local melee_reach = melee_aim_reach(
+        unit_data, activation_is_held("left_mouse", false, self._input_extension)
+    )
     if melee_reach then distance_limit = math.min(distance_limit, melee_reach) end
     local fov = mode == "trigger" and trigger_fov or aim_fov
     local target_position, visible, target, target_distance = select_aim_target(

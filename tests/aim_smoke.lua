@@ -1266,8 +1266,21 @@ assert(not parse_network_input(4),
 settings.enable_auto_fire = true
 mod.on_setting_changed("enable_auto_fire")
 shot_ready = false
+input_values.action_one_hold = false
 assert(not parse_network_input(5),
     "semi-automatic fire should wait for Darktide's action timing")
+units[activation_target].position = Vector3(8, 20, 0)
+camera_rotation = Vector3.normalize(Vector3(8, 20, 0))
+orientation.yaw, orientation.pitch = 0, 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.1, 11
+)
+cooldown_target, cooldown_position = mod.get_aim_preview()
+assert(orientation.yaw < 0 and cooldown_target == activation_target
+    and Vector3.to_elements(cooldown_position) == 8,
+    "holding raw mouse input should track an animated target while fire is filtered on cooldown")
+units[activation_target].position = Vector3(4, 20, 0)
+input_values.action_one_hold = true
 shot_ready = true
 assert(parse_network_input(6),
     "semi-automatic fire should send when Darktide accepts the action")
@@ -1568,13 +1581,13 @@ weapon_action_component.template.actions = {
 camera_rotation = Vector3.normalize(Vector3(1, 4, 0))
 orientation.yaw, orientation.pitch = 0, 0
 held_action = "action_one_hold"
-input_values.action_one_hold = true
+input_values.action_one_hold = false
 parse_network_input(18)
 hooks["PlayerUnitFirstPersonExtension.fixed_update"](
     first_person_extension, player_unit, 0.1, 2.6, 28
 )
 assert(orientation.yaw == 0 and orientation.pitch == 0,
-    "melee aim should ignore an in-FOV target beyond the current sweep reach")
+    "melee aim should preserve sweep reach while fire input is filtered on cooldown")
 
 held_action = nil
 input_values.action_one_hold = false
