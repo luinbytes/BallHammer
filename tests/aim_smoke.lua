@@ -1896,6 +1896,7 @@ units[multiplayer_mutant] = {
     velocity = Vector3(0, -8, 0),
 }
 HEALTH_ALIVE[multiplayer_mutant] = true
+set_replicated_fields(multiplayer_mutant, { target_unit_id = 1 })
 hooks["HealthExtension.init"](nil, nil, multiplayer_mutant)
 settings.enable_threat_reactions = true
 mod.on_setting_changed("enable_threat_reactions")
@@ -1948,6 +1949,8 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 )
 assert((mod.get_threat_indicator() or ""):find("DODGE", 1, true),
     "replicated specialist targets should produce a threat marker when client scratchpad data is absent")
+assert((mod.get_unit_data(replicated_mutant_hook).threat_text or ""):find("DODGE", 1, true),
+    "registered threats should update the source marker text")
 HEALTH_ALIVE[replicated_mutant_hook] = false
 hooks["OutlineSystem.on_remove_extension"]({}, replicated_mutant_hook, nil)
 multiplayer_rager = {}

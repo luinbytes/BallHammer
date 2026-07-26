@@ -1917,7 +1917,7 @@ local function update_survival(player_unit, first_person, t)
             local position = native_vector(Unit.world_position(unit, 1))
             local velocity = locomotion and locomotion.current_velocity
                 and native_vector(locomotion:current_velocity())
-            if position and velocity then
+            if network_target == player_unit and position and velocity then
                 local dx, dy = Vector3.to_elements(first_person.position - position)
                 local vx, vy = Vector3.to_elements(velocity)
                 local impact_t = Survival.charge_impact_time(dx, dy, vx, vy)
