@@ -388,10 +388,18 @@ local function refresh_settings()
     refresh_marker_aim_node()
 end
 
+local function raw_left_mouse_held()
+    local input = Managers.input
+    local mouse = input and input:_find_active_device("mouse")
+    local index = mouse and mouse:button_index("left")
+    return index and mouse:held(index) or false
+end
+
 local function activation_is_held(activation, custom_held, input_extension)
     if activation == "custom" then return custom_held end
     if not input_extension then return false end
-    local left_held = physical_action_one_hold or input_extension:get("action_one_hold")
+    local left_held = raw_left_mouse_held() or physical_action_one_hold
+        or input_extension:get("action_one_hold")
     if activation == "left_mouse" then return left_held end
     if activation == "right_mouse" then return input_extension:get("action_two_hold") end
     if activation == "both_mouse" then

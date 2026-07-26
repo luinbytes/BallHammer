@@ -288,6 +288,7 @@ local player = {
 local marker_events = {}
 local aim_marker_events = {}
 local held_action = "action_one_hold"
+raw_mouse_left_held = false
 local preexisting_units = {}
 local preexisting_pickups = {}
 luggable_socket_units = {}
@@ -376,7 +377,7 @@ Managers = {
             assert(device == "mouse")
             return {
                 button_index = function(_, button) return button end,
-                held = function() return false end,
+                held = function(_, button) return button == "left" and raw_mouse_left_held end,
             }
         end,
     },
@@ -1269,6 +1270,8 @@ shot_ready = false
 input_values.action_one_hold = false
 assert(not parse_network_input(5),
     "semi-automatic fire should wait for Darktide's action timing")
+held_action = nil
+raw_mouse_left_held = true
 units[activation_target].position = Vector3(8, 20, 0)
 camera_rotation = Vector3.normalize(Vector3(8, 20, 0))
 orientation.yaw, orientation.pitch = 0, 0
@@ -1279,7 +1282,19 @@ cooldown_target, cooldown_position = mod.get_aim_preview()
 assert(orientation.yaw < 0 and cooldown_target == activation_target
     and Vector3.to_elements(cooldown_position) == 8,
     "holding raw mouse input should track an animated target while fire is filtered on cooldown")
+units[activation_target].position = Vector3(12, 20, 0)
+camera_rotation = Vector3.normalize(Vector3(12, 20, 0))
+orientation.yaw, orientation.pitch = 0, 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.2, 12
+)
+cooldown_target, cooldown_position = mod.get_aim_preview()
+assert(orientation.yaw < 0 and cooldown_target == activation_target
+    and Vector3.to_elements(cooldown_position) == 12,
+    "raw mouse hold should refresh the aim point on every recovery tick")
 units[activation_target].position = Vector3(4, 20, 0)
+raw_mouse_left_held = false
+held_action = "action_one_hold"
 input_values.action_one_hold = true
 shot_ready = true
 assert(parse_network_input(6),
