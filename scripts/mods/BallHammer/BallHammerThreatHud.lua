@@ -20,6 +20,7 @@ local TONE_COLORS = {
     active = { 255, 255, 194, 70 },
     danger = { 255, 255, 82, 82 },
 }
+local HEADER_NAMES = { "status_header", "player_header" }
 local CLASS_NAMES = {
     veteran = "Veteran",
     zealot = "Zealot",
@@ -395,8 +396,8 @@ function BallHammerThreatHud:_apply_opacity(opacity)
         style.text.text_color[1] = math.floor(255 * alpha)
         style.distance.text_color[1] = math.floor(220 * alpha)
     end
-    for _, name in ipairs({ "status_header", "player_header" }) do
-        local style = self._widgets_by_name[name].style
+    for i = 1, #HEADER_NAMES do
+        local style = self._widgets_by_name[HEADER_NAMES[i]].style
         style.background.color[1] = math.floor(190 * alpha)
         if style.accent then style.accent.color[1] = math.floor(255 * alpha) end
         style.text.text_color[1] = math.floor(255 * alpha)

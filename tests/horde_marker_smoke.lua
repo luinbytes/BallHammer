@@ -95,6 +95,20 @@ for i = 1, 4 do
     template.on_enter(marker.widget, marker)
 end
 
+local replacement = {
+    id = markers[1].id,
+    unit = markers[1].unit,
+    widget = markers[1].widget,
+    draw = true,
+}
+mod.horde_active_markers[replacement.unit] = true
+template.on_enter(replacement.widget, replacement)
+template.on_exit(nil, markers[1])
+assert(mod.horde_marker_refs[replacement.unit] == replacement
+    and mod.horde_active_markers[replacement.unit],
+    "an old horde marker exit must not clear a newer replacement")
+markers[1] = replacement
+
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 0.7)
 assert(position_reads <= 24,
     "horde projection should inspect only the body-extents bones needed by the grouped ESP")

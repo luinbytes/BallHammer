@@ -41,23 +41,20 @@ template.update_function = function(_, ui_renderer, widget, marker)
     if not widget.visible or not widget.style then return end
     local renderer_scale = ui_renderer and ui_renderer.scale or 1
     local diameter = math.max(radius * 2 / renderer_scale, 8)
-    local sizes = {
-        glow = diameter + 10,
-        ring = diameter,
-        fill = math.max(diameter - 6, 4),
-        point = 4,
-    }
-    for id, size in pairs(sizes) do
-        local style = widget.style[id]
-        if style and style.size then
-            style.size[1], style.size[2] = size, size
-        end
-    end
+    local glow = widget.style.glow
+    local ring = widget.style.ring
+    local fill = widget.style.fill
+    local point = widget.style.point
+    glow.size[1], glow.size[2] = diameter + 10, diameter + 10
+    ring.size[1], ring.size[2] = diameter, diameter
+    local fill_size = math.max(diameter - 6, 4)
+    fill.size[1], fill.size[2] = fill_size, fill_size
+    point.size[1], point.size[2] = 4, 4
     local alpha = math.floor(255 * opacity / 100 + 0.5)
-    local ring = widget.style.ring.color
-    local glow = widget.style.glow.color
-    ring[1], ring[2], ring[3], ring[4] = alpha, red, green, blue
-    glow[1], glow[2], glow[3], glow[4] = math.floor(alpha * 0.2), red, green, blue
+    local ring_color = ring.color
+    local glow_color = glow.color
+    ring_color[1], ring_color[2], ring_color[3], ring_color[4] = alpha, red, green, blue
+    glow_color[1], glow_color[2], glow_color[3], glow_color[4] = math.floor(alpha * 0.2), red, green, blue
     widget.style.fill.color[1] = math.floor(alpha * 0.25)
     widget.style.point.color[1] = alpha
 end

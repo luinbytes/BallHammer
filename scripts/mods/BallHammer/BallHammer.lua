@@ -27,6 +27,13 @@ local DamageProfile = optional_require("scripts/utilities/attack/damage_profile"
 local HitZone = optional_require("scripts/utilities/attack/hit_zone")
 local Weakspot = optional_require("scripts/utilities/attack/weakspot")
 
+mod._damage_action_names = { "action_shoot_zoomed", "action_shoot", "action_shoot_hip" }
+mod._damage_profile_from_settings = function(settings)
+    if not settings then return nil end
+    local ok, value = pcall(Action.damage_template, settings)
+    return ok and type(value) == "table" and value or nil
+end
+
 local BREED_DATA = {
     chaos_hound                 = { name = "Hound",           color = { 255, 255, 61,  61  }, outline_color = { 1,   0.24, 0.24 }, slot = "special_target" },
     chaos_armored_hound         = { name = "Armored Hound",   color = { 255, 255, 61,  61  }, outline_color = { 1,   0.24, 0.24 }, slot = "special_target" },
@@ -448,57 +455,66 @@ local function remove_outline(unit, data)
     pcall(function() outline_system:remove_outline(unit, data.slot) end)
 end
 
-local function kill_marker(unit)
-    -- Set remove directly on the marker object — guaranteed cleanup
-    local marker = marker_refs[unit]
+mod._remove_world_marker = function(refs, active, requested, unit)
+    local marker = refs[unit]
     if marker then
         marker.remove = true
-        marker_refs[unit] = nil
+        refs[unit] = nil
     end
-    active_markers[unit] = nil
-    marker_requested_at[unit] = nil
+    active[unit] = nil
+    requested[unit] = nil
+end
+
+mod._request_world_marker = function(template, data, active, requested, unit)
+    if not markers_ready or active[unit] then return end
+    active[unit] = true
+    requested[unit] = marker_watchdog_tick
+    Managers.event:trigger("add_world_marker_unit", template.name, unit, nil, data)
+end
+
+mod._watch_world_markers = function(alive, active, refs, requested)
+    for unit in pairs(active) do
+        local marker = refs[unit]
+        local requested_at = requested[unit] or marker_watchdog_tick
+        if alive and alive[unit] and marker and marker.remove then
+            refs[unit] = nil
+            active[unit] = nil
+            requested[unit] = nil
+        elseif alive and alive[unit] and not marker
+            and marker_watchdog_tick - requested_at >= 2 then
+            active[unit] = nil
+            requested[unit] = nil
+        end
+    end
+end
+
+local function kill_marker(unit)
+    mod._remove_world_marker(marker_refs, active_markers, marker_requested_at, unit)
 end
 
 local function kill_horde_marker(unit)
-    local marker = horde_marker_refs[unit]
-    if marker then
-        marker.remove = true
-        horde_marker_refs[unit] = nil
-    end
-    horde_active_markers[unit] = nil
-    horde_marker_requested_at[unit] = nil
+    mod._remove_world_marker(horde_marker_refs, horde_active_markers, horde_marker_requested_at, unit)
 end
 
 local function kill_pickup_marker(unit)
-    local marker = pickup_marker_refs[unit]
-    if marker then
-        marker.remove = true
-        pickup_marker_refs[unit] = nil
-    end
-    pickup_active_markers[unit] = nil
-    pickup_marker_requested_at[unit] = nil
+    mod._remove_world_marker(pickup_marker_refs, pickup_active_markers, pickup_marker_requested_at, unit)
 end
 
 local function add_marker(unit)
-    if not markers_ready or active_markers[unit] then return end
-    active_markers[unit] = true
-    marker_requested_at[unit] = marker_watchdog_tick
-    Managers.event:trigger("add_world_marker_unit", MarkerTemplate.name, unit, nil, unit_data_map[unit])
+    mod._request_world_marker(MarkerTemplate, unit_data_map[unit], active_markers, marker_requested_at, unit)
 end
 
 local function add_horde_marker(unit)
-    if not markers_ready or horde_active_markers[unit] then return end
-    horde_active_markers[unit] = true
-    horde_marker_requested_at[unit] = marker_watchdog_tick
-    Managers.event:trigger("add_world_marker_unit", HordeMarkerTemplate.name, unit, nil, horde_unit_data[unit])
+    mod._request_world_marker(
+        HordeMarkerTemplate, horde_unit_data[unit], horde_active_markers,
+        horde_marker_requested_at, unit
+    )
 end
 
 local function add_pickup_marker(unit)
-    if not markers_ready or pickup_active_markers[unit] then return end
-    pickup_active_markers[unit] = true
-    pickup_marker_requested_at[unit] = marker_watchdog_tick
-    Managers.event:trigger(
-        "add_world_marker_unit", PickupMarkerTemplate.name, unit, nil, pickup_unit_data[unit]
+    mod._request_world_marker(
+        PickupMarkerTemplate, pickup_unit_data[unit], pickup_active_markers,
+        pickup_marker_requested_at, unit
     )
 end
 
@@ -1004,42 +1020,11 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
 
     -- A marker event can be dropped while the HUD is rebuilding. Retry any request
     -- that never produced a live marker object instead of losing that enemy forever.
-    for unit in pairs(active_markers) do
-        local marker = marker_refs[unit]
-        local requested_at = marker_requested_at[unit] or marker_watchdog_tick
-        if HEALTH_ALIVE[unit] and marker and marker.remove then
-            marker_refs[unit] = nil
-            active_markers[unit] = nil
-            marker_requested_at[unit] = nil
-        elseif HEALTH_ALIVE[unit] and not marker and marker_watchdog_tick - requested_at >= 2 then
-            active_markers[unit] = nil
-            marker_requested_at[unit] = nil
-        end
-    end
-    for unit in pairs(horde_active_markers) do
-        local marker = horde_marker_refs[unit]
-        local requested_at = horde_marker_requested_at[unit] or marker_watchdog_tick
-        if HEALTH_ALIVE[unit] and marker and marker.remove then
-            horde_marker_refs[unit] = nil
-            horde_active_markers[unit] = nil
-            horde_marker_requested_at[unit] = nil
-        elseif HEALTH_ALIVE[unit] and not marker and marker_watchdog_tick - requested_at >= 2 then
-            horde_active_markers[unit] = nil
-            horde_marker_requested_at[unit] = nil
-        end
-    end
-    for unit in pairs(pickup_active_markers) do
-        local marker = pickup_marker_refs[unit]
-        local requested_at = pickup_marker_requested_at[unit] or marker_watchdog_tick
-        if ALIVE[unit] and marker and marker.remove then
-            pickup_marker_refs[unit] = nil
-            pickup_active_markers[unit] = nil
-            pickup_marker_requested_at[unit] = nil
-        elseif ALIVE[unit] and not marker and marker_watchdog_tick - requested_at >= 2 then
-            pickup_active_markers[unit] = nil
-            pickup_marker_requested_at[unit] = nil
-        end
-    end
+    mod._watch_world_markers(HEALTH_ALIVE, active_markers, marker_refs, marker_requested_at)
+    mod._watch_world_markers(
+        HEALTH_ALIVE, horde_active_markers, horde_marker_refs, horde_marker_requested_at
+    )
+    mod._watch_world_markers(ALIVE, pickup_active_markers, pickup_marker_refs, pickup_marker_requested_at)
     if mod.enabled and mod.esp_enabled and enable_horde_esp then
         for unit in pairs(horde_unit_data) do
             if HEALTH_ALIVE[unit] and not horde_active_markers[unit] then add_horde_marker(unit) end
@@ -1375,23 +1360,20 @@ local function current_damage_profile(player_unit)
     local weapon_template = weapon_action and WeaponTemplate.current_weapon_template(weapon_action)
     if not weapon_template or not weapon_template.actions then return nil end
 
-    local profile
-    local action_names = {
-        weapon_action.current_action_name,
-        "action_shoot_zoomed",
-        "action_shoot",
-        "action_shoot_hip",
-        weapon_template.entry_actions and weapon_template.entry_actions.primary_action,
-    }
-    for i = 1, 5 do
-        local settings = action_names[i] and weapon_template.actions[action_names[i]]
-        if settings then
-            local ok, value = pcall(Action.damage_template, settings)
-            if ok and type(value) == "table" then
-                profile = value
-                break
-            end
+    local actions = weapon_template.actions
+    local profile = mod._damage_profile_from_settings(
+        actions[weapon_action.current_action_name]
+    )
+    if not profile then
+        for i = 1, #mod._damage_action_names do
+            profile = mod._damage_profile_from_settings(actions[mod._damage_action_names[i]])
+            if profile then break end
         end
+    end
+    if not profile then
+        local entry_actions = weapon_template.entry_actions
+        local entry_name = entry_actions and entry_actions.primary_action
+        profile = mod._damage_profile_from_settings(actions[entry_name])
     end
     if not profile then return nil end
     local ok, lerp_values = pcall(DamageProfile.lerp_values, profile, player_unit, 1)
@@ -1730,7 +1712,7 @@ local function register_threat(
     if not source or target ~= player_unit then return end
     commit_t = commit_t or survival_t
     impact_t = math.max(impact_t or commit_t, commit_t)
-    -- ponytail: audio fallbacks have no attack id; group one cue burst after a real dodge.
+    -- ponytail: audio fallbacks have no attack id; upgrade when a stable attack id is available.
     if phase == "melee_audio_cue"
         and commit_t < (mod._fallback_dodge_suppressed_until[source] or 0) then
         return
@@ -1775,15 +1757,17 @@ local function register_threat(
             kind, commit_t, impact_t, reaction_timing
         ) or commit_t
         set_threat_marker(active_threat, string.upper(kind))
-        local source_position = native_vector(Unit.world_position(source, 1))
-        local target_position = native_vector(Unit.world_position(target, 1))
-        local distance = source_position and target_position
-            and Vector3.length(source_position - target_position) or -1
-        debug_survival(string.format(
-            "%s target=%s phase=%s commit=%.3f impact=%.3f react=%.3f distance=%.2f",
-            kind, tostring(target), active_threat.phase, commit_t, impact_t,
-            active_threat.reaction_t, distance
-        ))
+        if enable_survival_debug and mod.info then
+            local source_position = native_vector(Unit.world_position(source, 1))
+            local target_position = native_vector(Unit.world_position(target, 1))
+            local distance = source_position and target_position
+                and Vector3.length(source_position - target_position) or -1
+            debug_survival(string.format(
+                "%s target=%s phase=%s commit=%.3f impact=%.3f react=%.3f distance=%.2f",
+                kind, tostring(target), active_threat.phase, commit_t, impact_t,
+                active_threat.reaction_t, distance
+            ))
+        end
     end
 end
 
@@ -1823,18 +1807,23 @@ local function enemy_targets_player(unit, player_unit)
         or replicated_target(unit) == player_unit
 end
 
+mod._enemy_running_action = function(unit, player_unit)
+    if not enemy_targets_player(unit, player_unit) then return nil end
+    local behavior = ScriptUnit.has_extension(unit, "behavior_system")
+    local running_action = behavior and behavior.running_action
+    if not running_action then return nil end
+    local ok, action = pcall(running_action, behavior)
+    return ok and type(action) == "string" and action or nil
+end
+
 local function nearby_enemy_geometry(player_position, radius)
     local distances, quadrants = {}, {}
     local player_unit = local_player_unit()
     for unit in pairs(aim_target_map) do
         if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
-            local behavior = enemy_targets_player(unit, player_unit)
-                and ScriptUnit.has_extension(unit, "behavior_system")
-            local running_action = behavior and behavior.running_action
-            local ok, action = false, nil
-            if running_action then ok, action = pcall(running_action, behavior) end
-            local melee = ok and type(action) == "string"
-                and not action:find("shoot", 1, true) and not action:find("throw", 1, true)
+            local action = mod._enemy_running_action(unit, player_unit)
+            local melee = action and not action:find("shoot", 1, true)
+                and not action:find("throw", 1, true)
                 and (action:find("melee", 1, true) or action:find("attack", 1, true))
             local position = melee and native_vector(Unit.world_position(unit, 1))
             if position then
@@ -1859,15 +1848,9 @@ end
 local function has_active_ranged_attack(player_unit)
     for unit in pairs(aim_target_map) do
         if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
-            if enemy_targets_player(unit, player_unit) then
-                local behavior = ScriptUnit.has_extension(unit, "behavior_system")
-                local running_action = behavior and behavior.running_action
-                local ok, action = false, nil
-                if running_action then ok, action = pcall(running_action, behavior) end
-                if ok and type(action) == "string"
-                    and (action:find("shoot", 1, true) or action:find("throw", 1, true)) then
-                    return true
-                end
+            local action = mod._enemy_running_action(unit, player_unit)
+            if action and (action:find("shoot", 1, true) or action:find("throw", 1, true)) then
+                return true
             end
         end
     end
@@ -2213,6 +2196,11 @@ mod:hook_safe("PlayerUnitFxExtension", "rpc_play_exclusive_player_sound", functi
 end)
 
 local semi_auto_pressed_action_t = setmetatable({}, { __mode = "k" })
+mod._survival_input_actions = {
+    "dodge", "action_one_hold", "action_one_pressed", "action_two_hold",
+    "wield_1", "wield_2", "weapon_reload_hold", "weapon_extra_hold",
+}
+mod._move_actions = { "move_forward", "move_backward", "move_left", "move_right" }
 
 local function activation_is_held_in_cache(
     activation, custom_held, controller_action, lookup, input_cache, index
@@ -2243,19 +2231,15 @@ local function set_cached_input(lookup, input_cache, index, action, value)
 end
 
 local function has_physical_survival_input(lookup, input_cache, index)
-    local actions = {
-        "dodge", "action_one_hold", "action_one_pressed", "action_two_hold",
-        "wield_1", "wield_2", "weapon_reload_hold", "weapon_extra_hold",
-    }
-    for i = 1, #actions do
-        local value = cached_input(lookup, input_cache, index, actions[i])
+    for i = 1, #mod._survival_input_actions do
+        local value = cached_input(lookup, input_cache, index, mod._survival_input_actions[i])
         if value == true or type(value) == "number" and value ~= 0 then return true end
     end
     return false
 end
 
 local function physical_move_action(lookup, input_cache, index)
-    for _, action in ipairs({ "move_forward", "move_backward", "move_left", "move_right" }) do
+    for _, action in ipairs(mod._move_actions) do
         local value = cached_input(lookup, input_cache, index, action)
         if value == true or type(value) == "number" and value ~= 0 then return action end
     end
@@ -2448,7 +2432,6 @@ mod:hook_safe("ActionInputParser", "mispredict_happened", function(self)
 end)
 
 mod:hook_require("scripts/utilities/action/action_handler", function(action_handler)
-    mod._action_handler = action_handler
     mod:hook(action_handler, "_calculate_time_scale", function(func, self, action_settings)
         local time_scale = func(self, action_settings)
         local player = Managers.player and Managers.player:local_player(1)
@@ -2465,7 +2448,6 @@ mod:hook_require("scripts/utilities/action/action_handler", function(action_hand
 end)
 
 mod:hook_require("scripts/extension_systems/weapon/actions/action_shoot", function(action_shoot)
-    mod._action_shoot = action_shoot
     mod:hook(action_shoot, "_fire_rate_settings", function(func, self)
         local settings = func(self)
         local player = Managers.player and Managers.player:local_player(1)

@@ -61,6 +61,13 @@ assert(widget.content.name == "Ritualist" and widget.content.flag == "SPECIAL",
 assert(widget.style.top.color[3] == 80 and widget.style.name.text_color[3] == 80,
     "priority markers should use their breed category color")
 assert(mod.marker_refs[unit] == marker, "marker should register its unit reference")
+local replacement = { unit = unit, data = marker.data, draw = true, base_height = 1.8 }
+mod.active_markers[unit] = true
+template.on_enter(widget, replacement, template)
+template.on_exit(nil, marker)
+assert(mod.marker_refs[unit] == replacement and mod.active_markers[unit],
+    "an old priority marker exit must not clear a newer replacement")
+marker = replacement
 live_data = { name = "Ritualist", flag = "SPECIAL", color = { 255, 255, 80, 80 } }
 
 local vector = {}

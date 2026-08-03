@@ -9,6 +9,7 @@ local cached_boxes = {}
 local transition_states = {}
 local TRANSITION_DURATION = 0.28
 local TRANSITION_SPEED = 14
+local BOX_STYLE_IDS = { "top", "bottom", "left", "right" }
 local HORDE_BONE_NODES = {
     "j_head", "j_spine", "j_hips",
     "j_leftshoulder", "j_rightshoulder",
@@ -286,16 +287,14 @@ local function animate_membership(unit, box, t)
         target_top, target_bottom = box.dot_y, box.dot_y
     end
 
-    local motion = {
-        left = box.member_left + (target_left - box.member_left) * eased,
-        right = box.member_right + (target_right - box.member_right) * eased,
-        top = box.member_top + (target_top - box.member_top) * eased,
-        bottom = box.member_bottom + (target_bottom - box.member_bottom) * eased,
-        box_alpha = leader and 1 or 1 - eased,
-        dot_alpha = eased,
-    }
+    state.left = box.member_left + (target_left - box.member_left) * eased
+    state.right = box.member_right + (target_right - box.member_right) * eased
+    state.top = box.member_top + (target_top - box.member_top) * eased
+    state.bottom = box.member_bottom + (target_bottom - box.member_bottom) * eased
+    state.box_alpha = leader and 1 or 1 - eased
+    state.dot_alpha = eased
     if progress == 0 then state.leader = false end
-    return motion
+    return state
 end
 
 local function apply_distance_alpha(widget, data, distance)
@@ -304,7 +303,7 @@ local function apply_distance_alpha(widget, data, distance)
     local fade = distance <= fade_start and 1 or math.max(0, (max_distance - distance) / (max_distance - fade_start))
     local alpha = math.floor(data.color[1] * fade + 0.5)
     local red, green, blue = data.color[2], data.color[3], data.color[4]
-    for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
+    for _, style_id in ipairs(BOX_STYLE_IDS) do
         local color = widget.style[style_id].color
         color[1], color[2], color[3], color[4] = alpha, red, green, blue
     end
@@ -315,7 +314,7 @@ local function apply_distance_alpha(widget, data, distance)
 end
 
 local function apply_motion_alpha(widget, motion)
-    for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
+    for _, style_id in ipairs(BOX_STYLE_IDS) do
         local color = widget.style[style_id].color
         color[1] = math.floor(color[1] * motion.box_alpha + 0.5)
     end
@@ -329,7 +328,7 @@ template.on_enter = function(widget, marker)
     mod.horde_marker_refs[marker.unit] = marker
     local data = marker.data or mod.horde_unit_data[marker.unit]
     if data and data.color then
-        for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
+        for _, style_id in ipairs(BOX_STYLE_IDS) do
             widget.style[style_id].color = table.clone(data.color)
         end
         widget.style.dot.color = table.clone(data.color)
@@ -338,9 +337,11 @@ template.on_enter = function(widget, marker)
 end
 
 template.on_exit = function(_, marker)
-    mod.horde_marker_refs[marker.unit] = nil
-    mod.horde_active_markers[marker.unit] = nil
-    transition_states[marker.unit] = nil
+    if mod.horde_marker_refs[marker.unit] == marker then
+        mod.horde_marker_refs[marker.unit] = nil
+        mod.horde_active_markers[marker.unit] = nil
+        transition_states[marker.unit] = nil
+    end
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker, _, _, t)

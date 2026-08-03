@@ -5,6 +5,7 @@ local Bounds = mod:io_dofile("BallHammer/scripts/mods/BallHammer/BallHammerBound
 
 local ACCENT = { 255, 255, 158, 181 }
 local TEXT = { 255, 224, 224, 229 }
+local BOX_STYLE_IDS = { "top", "bottom", "left", "right" }
 
 template.name = "ballhammer_marker"
 template.unit_node = "j_head"
@@ -98,7 +99,7 @@ local function apply_distance_alpha(widget, data, distance, visible)
     local alpha = math.floor(data.color[1] * fade + 0.5)
     local red, green, blue = visible and 255 or data.color[2],
         visible and 255 or data.color[3], visible and 255 or data.color[4]
-    for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
+    for _, style_id in ipairs(BOX_STYLE_IDS) do
         local color = widget.style[style_id].color
         color[1], color[2], color[3], color[4] = alpha, red, green, blue
     end
@@ -157,7 +158,7 @@ template.on_enter = function(widget, marker)
     if data then
         widget.content.name = name_for(data)
         widget.content.flag = flag_for(data)
-        for _, style_id in ipairs({ "top", "bottom", "left", "right" }) do
+        for _, style_id in ipairs(BOX_STYLE_IDS) do
             widget.style[style_id].color = table.clone(data.color)
         end
         widget.style.name.text_color = table.clone(data.color)
@@ -167,8 +168,10 @@ template.on_enter = function(widget, marker)
 end
 
 template.on_exit = function(_, marker)
-    mod.marker_refs[marker.unit] = nil
-    mod.active_markers[marker.unit] = nil
+    if mod.marker_refs[marker.unit] == marker then
+        mod.marker_refs[marker.unit] = nil
+        mod.active_markers[marker.unit] = nil
+    end
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker)

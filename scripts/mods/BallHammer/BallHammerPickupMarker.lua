@@ -149,7 +149,7 @@ local function layout_markers(parent, ui_renderer, t)
         return tostring(a.marker.unit) < tostring(b.marker.unit)
     end)
 
-    -- ponytail: pickup counts are tiny; connected screen components and lane scans stay simpler than an index.
+    -- ponytail: pickup counts are tiny; add a spatial index when scan cost becomes measurable.
     local assigned = {}
     for i = 1, #markers do
         if not assigned[i] then
@@ -222,8 +222,8 @@ template.on_exit = function(_, marker)
     if mod.pickup_marker_refs[marker.unit] == marker then
         mod.pickup_marker_refs[marker.unit] = nil
         mod.pickup_active_markers[marker.unit] = nil
+        transition_states[marker.unit] = nil
     end
-    transition_states[marker.unit] = nil
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker, _, _, t)
