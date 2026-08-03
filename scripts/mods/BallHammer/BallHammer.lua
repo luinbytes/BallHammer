@@ -21,8 +21,6 @@ local function optional_require(path)
 end
 
 local Action = optional_require("scripts/utilities/action/action")
-mod._action_handler = optional_require("scripts/utilities/action/action_handler")
-mod._action_shoot = optional_require("scripts/extension_systems/weapon/actions/action_shoot")
 local Armor = optional_require("scripts/utilities/attack/armor")
 local DamageCalculation = optional_require("scripts/utilities/attack/damage_calculation")
 local DamageProfile = optional_require("scripts/utilities/attack/damage_profile")
@@ -2449,8 +2447,9 @@ mod:hook_safe("ActionInputParser", "mispredict_happened", function(self)
     end
 end)
 
-if mod._action_handler then
-    mod:hook(mod._action_handler, "_calculate_time_scale", function(func, self, action_settings)
+mod:hook_require("scripts/utilities/action/action_handler", function(action_handler)
+    mod._action_handler = action_handler
+    mod:hook(action_handler, "_calculate_time_scale", function(func, self, action_settings)
         local time_scale = func(self, action_settings)
         local player = Managers.player and Managers.player:local_player(1)
         if not player or self._unit ~= player.player_unit then return time_scale end
@@ -2463,10 +2462,11 @@ if mod._action_handler then
         end
         return time_scale
     end)
-end
+end)
 
-if mod._action_shoot then
-    mod:hook(mod._action_shoot, "_fire_rate_settings", function(func, self)
+mod:hook_require("scripts/extension_systems/weapon/actions/action_shoot", function(action_shoot)
+    mod._action_shoot = action_shoot
+    mod:hook(action_shoot, "_fire_rate_settings", function(func, self)
         local settings = func(self)
         local player = Managers.player and Managers.player:local_player(1)
         if not mod._rapid_fire_active
@@ -2483,7 +2483,7 @@ if mod._action_shoot then
         end
         return rapid_settings
     end)
-end
+end)
 
 local function suppress_local_spread(self)
     local player = Managers.player and Managers.player:local_player(1)

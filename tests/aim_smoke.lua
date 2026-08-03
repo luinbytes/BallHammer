@@ -273,6 +273,9 @@ local mod = {
             return handler(original, ...)
         end
     end,
+    hook_require = function(_, path, callback)
+        callback(require(path))
+    end,
 }
 
 get_mod = function() return mod end
