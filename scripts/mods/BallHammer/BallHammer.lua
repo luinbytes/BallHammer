@@ -178,7 +178,7 @@ local aim_preview_radius = nil
 local requested_auto_fire_mode = nil
 local requested_auto_fire_until = nil
 local physical_action_one_hold = nil
-local enable_companion_target = true
+local enable_companion_target = false
 local companion_distance = 60
 local enable_auto_whistle = false
 local enable_aim_director = true
@@ -223,6 +223,10 @@ local hud_opacity = 80
 local aim_key_display = "LMB"
 local trigger_key_display = "OFF"
 local rage_key_display = "UNBOUND"
+
+mod._runtime_active = function()
+    return mod.enabled ~= false
+end
 
 local function warn_once(key, message)
     if survival_warning[key] then return end
@@ -316,6 +320,7 @@ mod.get_hud_settings = function()
     return show_system_status, show_threat_compass, threat_compass_range,
         show_player_list, hud_opacity
 end
+mod.get_ui_motion_enabled = function() return mod._ui_motion_enabled ~= false end
 mod.get_enable_nameplates = function() return enable_nameplates end
 mod.get_max_distance      = function() return max_distance end
 mod.get_enable_horde_esp  = function() return enable_horde_esp end
@@ -403,6 +408,7 @@ local function refresh_settings()
     threat_compass_range = mod:get("threat_compass_range") or 80
     show_player_list = mod:get("show_player_list") ~= false
     hud_opacity = mod:get("hud_opacity") or 80
+    mod._ui_motion_enabled = mod:get("enable_ui_motion") ~= false
     aim_key_display = key_label(aim_activation, "aim_key")
     trigger_key_display = key_label(trigger_activation, "trigger_key")
     rage_key_display = key_label("custom", "rage_key")
@@ -813,7 +819,7 @@ mod.on_setting_changed = function(setting_id)
 
     if setting_id == "show_system_status" or setting_id == "show_threat_compass"
         or setting_id == "threat_compass_range" or setting_id == "show_player_list"
-        or setting_id == "hud_opacity" then
+        or setting_id == "hud_opacity" or setting_id == "enable_ui_motion" then
         refresh_settings()
         return
     end
@@ -892,10 +898,6 @@ mod.on_setting_changed = function(setting_id)
             end
         else
             for unit, data in pairs(unit_data_map) do remove_outline(unit, data) end
-        end
-        if enable_nameplates and mod.esp_enabled then
-            for unit, _ in pairs(unit_data_map) do kill_marker(unit) end
-            marker_retry_frames = 10
         end
         return
     end
@@ -984,7 +986,7 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
             end
         end
         if mod.enabled and mod.esp_enabled and enable_horde_esp then
-            for unit, data in pairs(horde_unit_data) do
+            for unit in pairs(horde_unit_data) do
                 if HEALTH_ALIVE and HEALTH_ALIVE[unit] and not horde_active_markers[unit] then
                     add_horde_marker(unit)
                 end
@@ -1004,6 +1006,7 @@ mod:hook_safe("HudElementWorldMarkers", "update", function(self, dt, t)
     if outline_check_timer < 60 then return end
     outline_check_timer = 0
     marker_watchdog_tick = marker_watchdog_tick + 1
+    if not HEALTH_ALIVE or not ALIVE then return end
 
     local extension_manager = Managers.state and Managers.state.extension
     outline_system = extension_manager and extension_manager:system("outline_system") or nil
@@ -1282,7 +1285,8 @@ local function update_companion_target(player_unit, origin, physics_world, t)
 end
 
 local function queue_auto_whistle(target_unit)
-    if not enable_auto_whistle or target_unit == auto_whistle_used_target
+    if not mod._runtime_active() or not enable_auto_whistle
+        or target_unit == auto_whistle_used_target
         or target_unit == auto_whistle_pending_target then return end
     local player = Managers.player and Managers.player:local_player(1)
     local player_unit = player and player.player_unit
@@ -1329,6 +1333,7 @@ mod:hook_safe("AttackReportManager", "add_attack_result", function(
     self, damage_profile, attacked_unit, attacking_unit, attack_direction,
     hit_world_position, hit_weakspot, damage, attack_result, attack_type
 )
+    if not mod._runtime_active() then return end
     if attacked_unit == companion_target
         and is_local_companion_attack(attacking_unit, attack_type) then
         queue_auto_whistle(attacked_unit)
@@ -1381,6 +1386,14 @@ local function current_damage_profile(player_unit)
     return profile, lerp_values
 end
 
+mod._current_director_profile = function(player_unit)
+    if not mod._director_profile_resolved then
+        mod._director_profile, mod._director_lerp_values = current_damage_profile(player_unit)
+        mod._director_profile_resolved = true
+    end
+    return mod._director_profile, mod._director_lerp_values
+end
+
 local function melee_aim_reach(unit_data, attack_held)
     if not attack_held then return nil end
     local inventory = unit_data:read_component("inventory")
@@ -1403,7 +1416,7 @@ local function director_candidates(target_unit)
     local player = Managers.player and Managers.player:local_player(1)
     local player_unit = player and player.player_unit
     if not player_unit then return nil, false end
-    local profile, lerp_values = current_damage_profile(player_unit)
+    local profile, lerp_values = mod._current_director_profile(player_unit)
     if not profile then return nil, false end
     local unit_data = ScriptUnit.has_extension(target_unit, "unit_data_system")
     local breed = unit_data and unit_data:breed()
@@ -1489,11 +1502,9 @@ end
 
 local function target_metrics(
     physics_world, target_unit, origin, camera_forward,
-    distance_limit, fov, ignore_fov, mode, on_screen
+    distance_limit, fov, ignore_fov, mode, on_screen, locked_zone_only
 )
     if not HEALTH_ALIVE or not HEALTH_ALIVE[target_unit] then return nil end
-    local first_position, first_score, first_distance
-
     local function within_fov(position, distance)
         if ignore_fov then return true end
         local direction = Vector3.normalize(position - origin)
@@ -1521,9 +1532,6 @@ local function target_metrics(
         local score = mode == "rage"
             and danger_score(target_unit) * 0.5 + math.max(dot, 0) * 0.3 + range_score * 0.2
             or dot + range_score * 0.001
-        if not first_position then
-            first_position, first_score, first_distance = position, score, distance
-        end
         if has_line_of_sight(physics_world, target_unit, origin, direction, distance) then
             return position, score, true, distance
         end
@@ -1534,7 +1542,7 @@ local function target_metrics(
         local position, score, visible, distance = evaluate(candidates[i].position, true)
         if visible then
             if within_fov(position, distance) then return position, score, true, distance end
-            return nil
+            if locked_zone_only then return nil end
         end
     end
     if director_handled then return nil, nil, "immune" end
@@ -1553,7 +1561,7 @@ local function target_metrics(
     if visible then
         return position, score, true, distance
     end
-    return first_position, first_score, false, first_distance
+    return nil
 end
 
 local function clear_aim_lock()
@@ -1575,11 +1583,12 @@ local function set_aim_preview(target, position, mode, distance)
 end
 
 local function select_aim_target(
-    physics_world, origin, camera_forward, distance_limit, fov, dt,
+    physics_world, origin, camera_forward, distance_limit, fov,
     preferred_target, mode, on_screen, allow_scan
 )
     mode = mode or "aim"
     if locked_mode and locked_mode ~= mode then clear_aim_lock() end
+    local lost_target
     local current_position, current_score, current_visible, current_distance
     if locked_target then
         if not HEALTH_ALIVE or not HEALTH_ALIVE[locked_target] then
@@ -1587,15 +1596,19 @@ local function select_aim_target(
         else
             current_position, current_score, current_visible, current_distance = target_metrics(
                 physics_world, locked_target, origin, camera_forward,
-                distance_limit, fov, mode == "rage" or mode == "preview", mode, on_screen
+                distance_limit, fov, mode == "rage" or mode == "preview", mode, on_screen, true
             )
-            if current_visible ~= true then clear_aim_lock() end
+            if current_visible ~= true then
+                lost_target = locked_target
+                clear_aim_lock()
+            end
         end
     end
 
     local best_unit, best_position, best_score, best_distance
     if not locked_target and allow_scan ~= false then
-        if mode == "aim" and preferred_target and aim_target_map[preferred_target] then
+        if mode == "aim" and preferred_target ~= lost_target
+            and preferred_target and aim_target_map[preferred_target] then
             local position, score, visible, distance = target_metrics(
                 physics_world, preferred_target, origin, camera_forward,
                 distance_limit, fov, false, mode, on_screen
@@ -1606,13 +1619,15 @@ local function select_aim_target(
         end
         if not best_unit then
             for target_unit in pairs(aim_target_map) do
-                local position, score, visible, distance = target_metrics(
-                    physics_world, target_unit, origin, camera_forward,
-                    distance_limit, fov, mode == "rage" or mode == "preview", mode, on_screen
-                )
-                if visible == true and (not best_score or score > best_score or
-                   score == best_score and distance < best_distance) then
-                    best_unit, best_position, best_score, best_distance = target_unit, position, score, distance
+                if target_unit ~= lost_target then
+                    local position, score, visible, distance = target_metrics(
+                        physics_world, target_unit, origin, camera_forward,
+                        distance_limit, fov, mode == "rage" or mode == "preview", mode, on_screen
+                    )
+                    if visible == true and (not best_score or score > best_score or
+                       score == best_score and distance < best_distance) then
+                        best_unit, best_position, best_score, best_distance = target_unit, position, score, distance
+                    end
                 end
             end
         end
@@ -1708,6 +1723,7 @@ local function register_threat(
     kind, source, target, category, commit_t, impact_t, danger_position, phase,
     exact_reaction_t
 )
+    if not mod._runtime_active() then return end
     local player_unit = local_player_unit()
     if not source or target ~= player_unit then return end
     commit_t = commit_t or survival_t
@@ -1719,7 +1735,7 @@ local function register_threat(
     end
     if active_threat and commit_t > active_threat.impact_t + 0.05 then clear_active_threat() end
     local previous_t = threat_seen_at[source]
-    if previous_t and commit_t - previous_t < 0.2 then return end
+    if previous_t and commit_t >= previous_t and commit_t - previous_t < 0.2 then return end
     threat_seen_at[source] = commit_t
     if exact_reaction_t and active_threat and active_threat.source == source
         and active_threat.kind == kind and active_threat.reacted
@@ -1752,6 +1768,9 @@ local function register_threat(
     local chosen = Survival.prefer_threat(active_threat, candidate)
     if chosen ~= active_threat then
         clear_active_threat(true)
+        if requested_defense and requested_defense.source ~= candidate.source then
+            requested_defense = nil
+        end
         active_threat = candidate
         active_threat.reaction_t = exact_reaction_t or Survival.reaction_time(
             kind, commit_t, impact_t, reaction_timing
@@ -1816,9 +1835,11 @@ mod._enemy_running_action = function(unit, player_unit)
     return ok and type(action) == "string" and action or nil
 end
 
-local function nearby_enemy_geometry(player_position, radius)
+local function nearby_enemy_geometry(player_position, player_rotation, radius)
     local distances, quadrants = {}, {}
     local player_unit = local_player_unit()
+    local forward = Quaternion.forward(player_rotation)
+    local forward_x, forward_y = Vector3.to_elements(forward)
     for unit in pairs(aim_target_map) do
         if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
             local action = mod._enemy_running_action(unit, player_unit)
@@ -1832,9 +1853,11 @@ local function nearby_enemy_geometry(player_position, radius)
                 if distance <= radius then
                     distances[#distances + 1] = distance
                     local x, y = Vector3.to_elements(offset)
-                    local quadrant = math.abs(x) > math.abs(y)
-                        and (x >= 0 and "right" or "left")
-                        or (y >= 0 and "front" or "back")
+                    local front = x * forward_x + y * forward_y
+                    local side = forward_y * x - forward_x * y
+                    local quadrant = math.abs(side) > math.abs(front)
+                        and (side >= 0 and "right" or "left")
+                        or (front >= 0 and "front" or "back")
                     quadrants[quadrant] = true
                 end
             end
@@ -1857,11 +1880,10 @@ local function has_active_ranged_attack(player_unit)
     return false
 end
 
-local function update_resource_governor(player_unit, first_person)
+local function update_resource_governor(player_unit, first_person, context)
     governor_suppress_fire = false
     requested_vent = nil
     if not enable_resource_governor then return end
-    local context = current_weapon_context(player_unit)
     local unit_data = context.unit_data
     if not unit_data then
         warn_once("governor", "Resource Governor disabled: player unit data is unavailable")
@@ -1900,7 +1922,7 @@ local function update_resource_governor(player_unit, first_person)
 
     if enable_auto_vent and value >= target and not active_threat
         and not has_active_ranged_attack(player_unit) then
-        local nearby = nearby_enemy_geometry(first_person.position, 6)
+        local nearby = nearby_enemy_geometry(first_person.position, first_person.rotation, 6)
         local safe = #nearby == 0
         local heat_is_safe = kind ~= "heat" or heat_config and not heat_config.vent_damage_profile
         if safe and heat_is_safe and context.action_inputs.vent then
@@ -1915,16 +1937,18 @@ local function update_survival(player_unit, first_person, t)
     if active_threat and t > active_threat.impact_t + 0.05 then clear_active_threat() end
 
     for unit, data in pairs(unit_data_map) do
-        local network_target = replicated_target(unit)
         if (data.breed_name == "chaos_hound" or data.breed_name == "chaos_armored_hound")
             and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
             local blackboard = BLACKBOARDS and BLACKBOARDS[unit]
             local pounce = blackboard and blackboard.pounce
-            if pounce and pounce.started_leap then
+            local leap_started = pounce and pounce.started_leap == true
+            if leap_started and not data.hound_leap_active then
                 local target = pounce.target_unit or pounce.pounce_target
                     or blackboard.perception and blackboard.perception.target_unit
                 register_threat("hound", unit, target, "disabling", t, t + 0.35, nil, "leap")
             end
+            data.hound_leap_active = leap_started
+            local network_target = replicated_target(unit)
             local locomotion = ScriptUnit.has_extension(unit, "locomotion_system")
             local position = native_vector(Unit.world_position(unit, 1))
             local velocity = locomotion and locomotion.current_velocity
@@ -1943,6 +1967,7 @@ local function update_survival(player_unit, first_person, t)
         end
         if data.breed_name and data.breed_name:gsub("_mutator$", "") == "cultist_mutant"
             and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
+            local network_target = replicated_target(unit)
             local locomotion = ScriptUnit.has_extension(unit, "locomotion_system")
             local position = native_vector(Unit.world_position(unit, 1))
             local velocity = locomotion and locomotion.current_velocity
@@ -1960,8 +1985,9 @@ local function update_survival(player_unit, first_person, t)
             end
         end
         if data.breed_name == "cultist_flamer" or data.breed_name == "renegade_flamer" then
+            local network_target = HEALTH_ALIVE and HEALTH_ALIVE[unit]
+                and replicated_target(unit)
             local flamer_active = network_target == player_unit
-                and HEALTH_ALIVE and HEALTH_ALIVE[unit]
                 and replicated_field(unit, "state") == 3
             if flamer_active and not data.flamer_active then
                 register_threat(
@@ -1973,7 +1999,8 @@ local function update_survival(player_unit, first_person, t)
         end
     end
 
-    local context = current_weapon_context(player_unit)
+    local context = (enable_guard_brain or enable_resource_governor)
+        and current_weapon_context(player_unit)
     if active_threat then
         local remaining = math.max(active_threat.impact_t - t, 0)
         active_threat.time_left = remaining
@@ -2008,7 +2035,9 @@ local function update_survival(player_unit, first_person, t)
     if enable_guard_brain and context.can_block
         and not requested_defense and t >= next_guard_push_t then
         local stamina = context.unit_data and context.unit_data:read_component("stamina")
-        local distances, safe_retreat = nearby_enemy_geometry(first_person.position, 4)
+        local distances, safe_retreat = nearby_enemy_geometry(
+            first_person.position, first_person.rotation, 4
+        )
         if Survival.should_push(
             distances, stamina and stamina.current_fraction or 0, stamina_reserve, safe_retreat
         ) then
@@ -2020,7 +2049,7 @@ local function update_survival(player_unit, first_person, t)
             next_guard_push_t = t + 1
         end
     end
-    update_resource_governor(player_unit, first_person)
+    update_resource_governor(player_unit, first_person, context)
 end
 
 mod:hook_safe("BtShootNetAction", "_start_shooting", function(self, unit, scratchpad)
@@ -2091,6 +2120,7 @@ mod:hook_safe("BtMeleeAttackAction", "_start_attack_anim", function(
 end)
 
 local function nearest_network_attacker(position, breed_filter)
+    if not mod._runtime_active() then return nil end
     local player_unit = local_player_unit()
     position = position and native_vector(position)
         or player_unit and native_vector(Unit.world_position(player_unit, 1))
@@ -2202,6 +2232,41 @@ mod._survival_input_actions = {
 }
 mod._move_actions = { "move_forward", "move_backward", "move_left", "move_right" }
 
+mod._reset_transient_runtime = function()
+    aimbot_held, triggerbot_held, rage_held = false, false, false
+    mod._rapid_fire_held = false
+    mod._rapid_fire_active = false
+    mod._runtime_player_unit = nil
+    physical_action_one_hold = nil
+    requested_auto_fire_mode, requested_auto_fire_until = nil, nil
+    requested_defense, requested_vent = nil, nil
+    governor_suppress_fire = false
+    hud_aim_mode = nil
+    companion_target = nil
+    companion_next_scan_t = 0
+    companion_waiting_for_damage = false
+    companion_wait_deadline_t = 0
+    auto_whistle_pending_target = nil
+    auto_whistle_used_target = nil
+    auto_whistle_hold_until = nil
+    next_smart_target_refresh_t = 0
+    next_preview_scan_t = 0
+    next_guard_push_t = 0
+    survival_t = 0
+    clear_aim_lock()
+    set_aim_preview(nil, nil, nil, nil)
+    clear_active_threat(true)
+    table.clear(companion_attackers)
+    table.clear(semi_auto_pressed_action_t)
+    table.clear(threat_seen_at)
+    table.clear(mod._fallback_dodge_suppressed_until)
+    table.clear(resource_history)
+    table.clear(director_score_cache)
+    mod._director_profile_resolved = false
+    mod._director_profile = nil
+    mod._director_lerp_values = nil
+end
+
 local function activation_is_held_in_cache(
     activation, custom_held, controller_action, lookup, input_cache, index
 )
@@ -2298,6 +2363,7 @@ mod:hook("HumanInputHandler", "_parse_input", function(
     func, self, input_cache, input_service, index
 )
     func(self, input_cache, input_service, index)
+    if not mod._runtime_active() then return end
 
     local lookup = self._action_lookup
     local hold_index = lookup and lookup.action_one_hold
@@ -2434,6 +2500,7 @@ end)
 mod:hook_require("scripts/utilities/action/action_handler", function(action_handler)
     mod:hook(action_handler, "_calculate_time_scale", function(func, self, action_settings)
         local time_scale = func(self, action_settings)
+        if not mod._runtime_active() then return time_scale end
         local player = Managers.player and Managers.player:local_player(1)
         if not player or self._unit ~= player.player_unit then return time_scale end
         local kind = action_settings and action_settings.kind
@@ -2450,6 +2517,7 @@ end)
 mod:hook_require("scripts/extension_systems/weapon/actions/action_shoot", function(action_shoot)
     mod:hook(action_shoot, "_fire_rate_settings", function(func, self)
         local settings = func(self)
+        if not mod._runtime_active() then return settings end
         local player = Managers.player and Managers.player:local_player(1)
         if not mod._rapid_fire_active
             or not player or self._player_unit ~= player.player_unit then
@@ -2469,7 +2537,8 @@ end)
 
 local function suppress_local_spread(self)
     local player = Managers.player and Managers.player:local_player(1)
-    return enable_no_spread and player and self._unit == player.player_unit
+    return mod._runtime_active() and enable_no_spread
+        and player and self._unit == player.player_unit
 end
 
 mod:hook("PlayerUnitWeaponSpreadExtension", "randomized_spread", function(
@@ -2497,7 +2566,8 @@ mod:hook(Recoil, "add_recoil", function(
     movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit
 )
     local player = Managers.player and Managers.player:local_player(1)
-    if enable_no_recoil and player and unit == player.player_unit then return end
+    if mod._runtime_active() and enable_no_recoil
+        and player and unit == player.player_unit then return end
     return func(t, recoil_template, recoil_component, recoil_control_component,
         movement_state_component, locomotion_component, inair_state_component, fp_rotation, unit)
 end)
@@ -2506,7 +2576,7 @@ local function local_recoil_offset(func, recoil_template, read_recoil_component,
     local player = Managers.player and Managers.player:local_player(1)
     local first_person = player and player.player_unit
         and ScriptUnit.has_extension(player.player_unit, "first_person_system")
-    if enable_no_recoil and first_person
+    if mod._runtime_active() and enable_no_recoil and first_person
         and read_recoil_component == first_person._recoil_component then return 0, 0 end
     return func(recoil_template, read_recoil_component, ...)
 end
@@ -2515,29 +2585,47 @@ mod:hook(Recoil, "first_person_offset", local_recoil_offset)
 mod:hook(Recoil, "weapon_offset", local_recoil_offset)
 
 mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, unit, dt, t, frame)
-    if not dt or dt <= 0 then return end
+    if not mod._runtime_active() or not dt or dt <= 0 then return end
 
     requested_auto_fire_mode = nil
     requested_auto_fire_until = nil
 
     local player = Managers.player and Managers.player:local_player(1)
-    if not player or unit ~= player.player_unit or not player:unit_is_alive() then
-        hud_aim_mode = nil
-        clear_aim_lock()
+    if not player or not player.player_unit then
+        mod._reset_transient_runtime()
+        return
+    end
+    if unit ~= player.player_unit then return end
+    if not player:unit_is_alive() then
+        mod._reset_transient_runtime()
         return
     end
 
+    if mod._runtime_player_unit and mod._runtime_player_unit ~= unit then
+        mod._reset_transient_runtime()
+    end
+    mod._runtime_player_unit = unit
+
     local unit_data = ScriptUnit.has_extension(unit, "unit_data_system")
-    if not unit_data then return end
+    if not unit_data then
+        mod._reset_transient_runtime()
+        return
+    end
 
     local first_person = unit_data:read_component("first_person")
-    if not first_person or not first_person.position or not first_person.rotation then return end
+    if not first_person or not first_person.position or not first_person.rotation then
+        mod._reset_transient_runtime()
+        return
+    end
 
     local physics_world = World.physics_world(self._world)
     local visibility_origin = player_camera_position(player, first_person.position)
     update_companion_target(unit, visibility_origin, physics_world, t)
     update_auto_whistle_from_companion_state(unit)
     update_survival(unit, first_person, t)
+    mod._director_profile_resolved = false
+    mod._director_profile = nil
+    mod._director_lerp_values = nil
 
     local mode
     if activation_is_held(
@@ -2576,7 +2664,7 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
         local preview_fov = preview_mode == "trigger" and trigger_fov or aim_fov
         local preview_position, _, preview_target, preview_distance = select_aim_target(
             physics_world, visibility_origin, camera_forward,
-            aim_distance, preview_fov, dt, nil, "preview", on_screen, scan_preview
+            aim_distance, preview_fov, nil, "preview", on_screen, scan_preview
         )
         set_aim_preview(preview_target, preview_position, preview_mode, preview_distance)
         return
@@ -2606,14 +2694,14 @@ mod:hook_safe("PlayerUnitFirstPersonExtension", "fixed_update", function(self, u
     local fov = mode == "trigger" and trigger_fov or aim_fov
     local target_position, visible, target, target_distance = select_aim_target(
         physics_world, visibility_origin, camera_forward,
-        distance_limit, fov, dt, preferred_target, mode, on_screen
+        distance_limit, fov, preferred_target, mode, on_screen
     )
     if target_position or mode == "rage" then
         set_aim_preview(target, target_position, mode, target_distance)
     else
         local preview_position, _, preview_target, preview_distance = select_aim_target(
             physics_world, visibility_origin, camera_forward,
-            aim_distance, fov, dt, nil, "preview", on_screen
+            aim_distance, fov, nil, "preview", on_screen
         )
         set_aim_preview(preview_target, preview_position, mode, preview_distance)
         clear_aim_lock()
@@ -2650,30 +2738,16 @@ mod:hook_safe("InteracteeExtension", "init", function(self, extension_init_conte
     add_pickup_esp(unit)
 end)
 
+mod:hook_safe("InteracteeExtension", "set_used", function(self)
+    local unit = self and self._unit
+    if not unit then return end
+    kill_pickup_marker(unit)
+    pickup_unit_data[unit] = nil
+end)
+
 local function teardown_runtime(for_reload)
     mod.enabled = false
-    aimbot_held, triggerbot_held, rage_held = false, false, false
-    mod._rapid_fire_held = false
-    mod._rapid_fire_active = false
-    physical_action_one_hold = nil
-    requested_auto_fire_mode, requested_auto_fire_until = nil, nil
-    requested_defense, requested_vent = nil, nil
-    governor_suppress_fire = false
-    hud_aim_mode = nil
-    companion_target = nil
-    companion_waiting_for_damage = false
-    companion_wait_deadline_t = 0
-    auto_whistle_pending_target = nil
-    auto_whistle_used_target = nil
-    auto_whistle_hold_until = nil
-    next_preview_scan_t = 0
-    clear_aim_lock()
-    set_aim_preview(nil, nil, nil, nil)
-    clear_active_threat()
-    table.clear(companion_attackers)
-    table.clear(semi_auto_pressed_action_t)
-    table.clear(mod._fallback_dodge_suppressed_until)
-    table.clear(resource_history)
+    mod._reset_transient_runtime()
 
     for unit, data in pairs(unit_data_map) do
         remove_outline(unit, data)
@@ -2723,6 +2797,7 @@ end
 
 mod.on_enabled = function()
     mod.enabled = true
+    mod._reset_transient_runtime()
     refresh_settings()
     attach_live_world_markers()
     discover_existing_units()

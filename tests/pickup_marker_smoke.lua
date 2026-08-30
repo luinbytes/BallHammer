@@ -6,6 +6,7 @@ end
 
 local enabled = true
 local pickup_filter = "all"
+local ui_motion = true
 local unit = {}
 local world_positions = { [unit] = { 0, 0, 0 } }
 Unit = {
@@ -22,6 +23,7 @@ local mod = {
     pickup_active_markers = {},
     get_pickup_data = function() return data end,
     get_enable_pickup_esp = function() return enabled end,
+    get_ui_motion_enabled = function() return ui_motion end,
     get_pickup_distance = function() return 100 end,
     get_pickup_visible = function(value)
         return pickup_filter == "all" or value.category == pickup_filter
@@ -230,6 +232,14 @@ assert(math.abs(close_overlap_markers[1].widget.offset[1]
     and math.abs(close_overlap_markers[1].widget.offset[2]
         - close_overlap_markers[2].widget.offset[2]) >= 24,
     "nearby pickups should stay grouped until their anchors have a clean non-overlapping gap")
+ui_motion = false
+update_stack(12)
+assert(math.abs(close_overlap_markers[1].widget.offset[1]
+        - close_overlap_markers[2].widget.offset[1]) < 0.001
+    and math.abs(close_overlap_markers[1].widget.offset[2]
+        - close_overlap_markers[2].widget.offset[2]) == 27,
+    "pickup stacks should snap to their layout when UI motion is disabled")
+ui_motion = true
 
 local spread_units = { {}, {} }
 local spread_markers = {}
@@ -249,7 +259,7 @@ for i = 1, 2 do
     anchors[#anchors + 1] = { 1200 + i * 10, 100 }
     spread_markers[i] = spread_marker
 end
-update_stack(12)
+update_stack(12.1)
 update_stack(12.3)
 assert(math.abs(spread_markers[1].widget.offset[1] - spread_markers[2].widget.offset[1]) < 1
     and math.abs(spread_markers[1].widget.offset[2] - spread_markers[2].widget.offset[2]) >= 24,
@@ -292,10 +302,12 @@ mod.pickup_marker_refs[deleted_unit] = {
     draw = true,
     widget = pickup_widget(10, 0, 0),
 }
+local projection_reads = 0
 local buffered_parent = {
     _get_camera = function() return {} end,
     _get_screen_offset = function() return 0, 0 end,
     _convert_world_to_screen_position = function(_, _, position)
+        projection_reads = projection_reads + 1
         return position.screen_x, position.screen_y
     end,
 }
@@ -304,6 +316,11 @@ template.update_function(buffered_parent, { scale = 1, inverse_scale = 1 },
     buffered_widget, buffered_marker, nil, nil, 14)
 assert(buffered_widget.visible,
     "pickups should remain drawn while their anchor is inside the shared offscreen buffer")
+local frame_projection_reads = projection_reads
+template.update_function(buffered_parent, { scale = 1, inverse_scale = 1 },
+    widget, marker, nil, nil, 14)
+assert(frame_projection_reads > 0 and projection_reads == frame_projection_reads,
+    "pickup layout should project the marker set only once per frame")
 world_positions[buffered_unit].screen_x = -180
 template.update_function(buffered_parent, { scale = 1, inverse_scale = 1 },
     buffered_widget, buffered_marker, nil, nil, 14.1)
@@ -332,7 +349,20 @@ assert(widget.visible, "pickup filter changes should restore matching existing m
 enabled = false
 template.update_function(nil, nil, widget, marker)
 assert(not widget.visible, "pickup labels should respect their independent setting")
+enabled = true
+local invalid_unit = {}
+ALIVE[invalid_unit] = true
+local invalid_widget = pickup_widget(10, 0, 0)
+local invalid_marker = { unit = invalid_unit, data = {}, draw = true, widget = invalid_widget }
+template.on_enter(invalid_widget, invalid_marker)
+template.update_function(nil, nil, invalid_widget, invalid_marker)
+assert(invalid_marker.remove and not invalid_widget.visible,
+    "pickup markers should remove themselves instead of rendering incomplete data")
 ALIVE[unit] = false
 template.update_function(nil, nil, widget, marker)
 assert(marker.remove, "despawned pickups should remove their marker")
+ALIVE = nil
+marker.remove = false
+template.update_function(nil, nil, widget, marker)
+assert(marker.remove, "pickup markers should fail closed when the lifecycle table is unavailable")
 print("BallHammer pickup marker smoke: ok")

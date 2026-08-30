@@ -14,6 +14,8 @@ local COMPASS_HALF = COMPASS_WIDTH * 0.5 - 64
 local THREAT_SCAN_INTERVAL = 0.1
 local STATUS_INTERVAL = 0.1
 local PLAYER_INTERVAL = 0.25
+local COMPASS_MOTION_DURATION = 0.09
+local COMPASS_REAR_THRESHOLD = 0.88
 local TONE_COLORS = {
     idle = { 255, 128, 137, 148 },
     ready = { 255, 105, 220, 145 },
@@ -347,7 +349,13 @@ local function boxed_position(box)
 end
 
 local function extension(unit, name)
-    return unit and ScriptUnit.has_extension(unit, name) or nil
+    return alive(unit) and ScriptUnit and ScriptUnit.has_extension
+        and ScriptUnit.has_extension(unit, name) or nil
+end
+
+local function motion_enabled()
+    local getter = mod.get_ui_motion_enabled
+    return type(getter) ~= "function" or getter() ~= false
 end
 
 local function in_mission()
@@ -373,8 +381,9 @@ function BallHammerThreatHud:init(parent, draw_layer, start_scale)
     self._selected_threats = {}
     self._display_threats = {}
     self._player_candidates = {}
+    self._threat_count = 0
+    self._compass_motion = setmetatable({}, { __mode = "k" })
     self._last_opacity = nil
-    self._compass_visible = nil
 end
 
 function BallHammerThreatHud:_apply_opacity(opacity)
@@ -450,12 +459,14 @@ function BallHammerThreatHud:_refresh_threats(range)
     local selected = self._selected_threats
     for i = #candidates, 1, -1 do candidates[i] = nil end
     for i = #selected, 1, -1 do selected[i] = nil end
-    if not camera_position then return end
+    self._threat_count = 0
+    if not camera_position or type(range) ~= "number" then return end
 
     local active_source = active_threat and active_threat.source
     local has_active_source = false
     for unit, data in pairs(threats or {}) do
-        if (data.flag == "SPECIAL" or data.flag == "BOSS") and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
+        if type(data) == "table" and (data.flag == "SPECIAL" or data.flag == "BOSS")
+            and HEALTH_ALIVE and HEALTH_ALIVE[unit] then
             local position = unit_position(unit)
             local distance = position and Vector3.length(position - camera_position)
             if distance and distance <= range then
@@ -500,26 +511,39 @@ function BallHammerThreatHud:_refresh_threats(range)
         if a.active ~= b.active then return a.active end
         return a.distance < b.distance
     end)
+    self._threat_count = #candidates
     for i = 1, math.min(#candidates, MAX_THREATS) do selected[i] = candidates[i] end
 end
 
-function BallHammerThreatHud:_update_compass(visible_compass)
+function BallHammerThreatHud:_clear_compass()
+    local background = self._widgets_by_name.compass
+    background.content.summary = ""
+    for i = 1, MAX_THREATS do
+        local widget = self._widgets_by_name["compass_threat_" .. i]
+        widget.content.visible = false
+        widget.content.text = ""
+        widget.content.distance = ""
+    end
+end
+
+function BallHammerThreatHud:_update_compass(visible_compass, dt)
     local background = self._widgets_by_name.compass
     background.content.visible = visible_compass
-    local visibility_changed = self._compass_visible ~= visible_compass
-    self._compass_visible = visible_compass
     if not visible_compass then
-        if visibility_changed then
-            for i = 1, MAX_THREATS do
-                self._widgets_by_name["compass_threat_" .. i].content.visible = false
-            end
-        end
+        self:_clear_compass()
         return
     end
 
     local camera = self._parent and self._parent.player_camera and self._parent:player_camera()
-    if not camera then return end
+    if not camera then
+        self:_clear_compass()
+        return
+    end
     local camera_position = ScriptCamera.position(camera)
+    if not camera_position then
+        self:_clear_compass()
+        return
+    end
     local rotation = Camera.local_rotation(camera)
     local forward = Quaternion.forward(rotation)
     forward.z = 0
@@ -537,6 +561,26 @@ function BallHammerThreatHud:_update_compass(visible_compass)
             delta.z = 0
             delta = Vector3.normalize(delta)
             local angle = math.atan2(Vector3.dot(right, delta), Vector3.dot(forward, delta))
+            local raw_x = angle / math.pi * COMPASS_HALF
+            local key = candidate.unit or candidate.position_box
+            local motion = self._compass_motion[key]
+            if not motion then
+                motion = { x = raw_x }
+                self._compass_motion[key] = motion
+            end
+            local rear = math.abs(raw_x) >= COMPASS_HALF * COMPASS_REAR_THRESHOLD
+            if rear then
+                motion.rear_side = motion.rear_side or (raw_x < 0 and -1 or 1)
+            else
+                motion.rear_side = raw_x < 0 and -1 or 1
+            end
+            local target_x = rear and motion.rear_side * COMPASS_HALF or raw_x
+            if motion_enabled() then
+                local alpha = 1 - math.exp(-math.max(0, dt or 0) / COMPASS_MOTION_DURATION)
+                motion.x = motion.x + (target_x - motion.x) * alpha
+            else
+                motion.x = target_x
+            end
             count = count + 1
             local item = display[count]
             if not item then
@@ -544,14 +588,16 @@ function BallHammerThreatHud:_update_compass(visible_compass)
                 display[count] = item
             end
             item.candidate = candidate
-            item.x = angle / math.pi * COMPASS_HALF
+            item.x = motion.x
             item.focused = candidate == self._selected_threats[1]
             item.height = height
         end
     end
     for i = count + 1, #display do display[i] = nil end
     table.sort(display, function(a, b) return a.x < b.x end)
-    background.content.summary = string.format("%d THREAT%s", count, count == 1 and "" or "S")
+    local threat_count = self._threat_count or count
+    background.content.summary = string.format("%d THREAT%s", threat_count,
+        threat_count == 1 and "" or "S")
 
     for i = 1, count do
         local item = display[i]
@@ -721,7 +767,7 @@ function BallHammerThreatHud:update(dt, t, ui_renderer, render_settings, input_s
         self._next_threat_scan_t = t + THREAT_SCAN_INTERVAL
         self:_refresh_threats(compass_range)
     end
-    self:_update_compass(show_compass)
+    self:_update_compass(show_compass, dt)
 
     if t < self._next_player_t - 1 then self._next_player_t = 0 end
     if t >= self._next_player_t then

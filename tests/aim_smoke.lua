@@ -100,7 +100,6 @@ local settings = {
     max_distance = 80,
     outline_distance = 30,
     esp_controller_activation = "off",
-    enable_aimbot = true,
     aim_distance = 80,
     aim_fov = 30,
     aim_smoothness = 55,
@@ -144,6 +143,7 @@ local settings = {
     enable_auto_vent = false,
     peril_target = 90,
     heat_target = 90,
+    enable_ui_motion = true,
 }
 local messages = {}
 local hooks = {}
@@ -228,7 +228,10 @@ package.preload["scripts/settings/damage/attack_settings"] = function()
     return { attack_types = { companion_dog = "companion_dog" } }
 end
 package.preload["scripts/utilities/weapon/weapon_template"] = function()
-    return { current_weapon_template = function(component) return component.template end }
+    return { current_weapon_template = function(component)
+        weapon_template_lookups = (weapon_template_lookups or 0) + 1
+        return component.template
+    end }
 end
 local HumanInputHandler = {
     _parse_input = function(self, input_cache, input_service, index)
@@ -303,10 +306,11 @@ HEALTH_ALIVE = {}
 ALIVE = { [player_unit] = true }
 BLACKBOARDS = {}
 local orientation = { yaw = 0, pitch = 0 }
+player_alive = true
 local player = {
     player_unit = player_unit,
     viewport_name = "player_1",
-    unit_is_alive = function() return true end,
+    unit_is_alive = function() return player_alive end,
     get_orientation = function() return orientation end,
     set_orientation = function(_, yaw, pitch, roll)
         orientation.yaw, orientation.pitch, orientation.roll = yaw, pitch, roll
@@ -368,6 +372,7 @@ unit_ids[player_unit] = 1
 id_units[1] = player_unit
 GameSession = {
     has_game_object_field = function(_, object_id, field)
+        replicated_field_checks = (replicated_field_checks or 0) + 1
         local unit = id_units[object_id]
         return unit and replicated_fields[unit]
             and replicated_fields[unit][field] ~= nil or false
@@ -636,6 +641,12 @@ hud_settings = { mod.get_hud_settings() }
 assert(hud_settings[1] and hud_settings[2] and hud_settings[3] == 80
     and hud_settings[4] and hud_settings[5] == 80,
     "tactical HUD should expose safe defaults to the registered native element")
+assert(mod.get_ui_motion_enabled(), "HUD motion should default on")
+settings.enable_ui_motion = false
+mod.on_setting_changed("enable_ui_motion")
+assert(not mod.get_ui_motion_enabled(), "HUD motion changes should apply live")
+settings.enable_ui_motion = true
+mod.on_setting_changed("enable_ui_motion")
 hud_rows = mod.get_hud_status_rows()
 assert(#hud_rows == 5 and hud_rows[1].label == "AIM" and hud_rows[1].key == "LMB"
     and hud_rows[4].state == "OFF" and hud_rows[5].state == "OFF",
@@ -796,6 +807,20 @@ for pickup_type, expected_name in pairs(stimm_names) do
     assert(marker_events[#marker_events].data.filter_id,
         pickup_type .. " should expose an individual custom-filter id")
 end
+consumed_pickup = {}
+units[consumed_pickup] = {
+    pickup_type = "large_metal",
+    position = Vector3(1, 6, 0),
+}
+ALIVE[consumed_pickup] = true
+hooks["InteracteeExtension.init"](nil, nil, consumed_pickup)
+consumed_pickup_marker = { remove = false }
+mod.pickup_marker_refs[consumed_pickup] = consumed_pickup_marker
+assert(hooks["InteracteeExtension.set_used"],
+    "pickup cleanup must hook the current interactee-consumed lifecycle seam")
+hooks["InteracteeExtension.set_used"]({ _unit = consumed_pickup })
+assert(consumed_pickup_marker.remove and mod.get_pickup_data(consumed_pickup) == nil,
+    "consuming a live pickup must remove its marker and cached data immediately")
 settings.pickup_filter = "stimms"
 mod.on_setting_changed("pickup_filter")
 assert(not mod.get_pickup_visible({ category = "materials" })
@@ -996,11 +1021,9 @@ hooks["HealthExtension.init"](nil, nil, blocked_best)
 hooks["HealthExtension.init"](nil, nil, visible_fallback)
 
 mod.aimbot_held(false)
-settings.enable_aimbot = false
 settings.aim_activation = "right_mouse"
 settings.aim_smoothness = 80
 settings.aim_curve = 0
-mod.on_setting_changed("enable_aimbot")
 mod.on_setting_changed("aim_activation")
 mod.on_setting_changed("aim_smoothness")
 mod.on_setting_changed("aim_curve")
@@ -1031,7 +1054,7 @@ local expected_yaw = math.atan2(8, 1.5) - math.pi * 0.5
 local expected_pitch = math.asin(0.5 / math.sqrt(1.5 * 1.5 + 8 * 8 + 0.5 * 0.5))
 local aim_alpha = 1 - math.exp(-(2 + (100 - settings.aim_smoothness) * 0.22) * 0.1)
 assert(math.abs(orientation.yaw - expected_yaw * aim_alpha) < 0.0001 and orientation.yaw ~= expected_yaw,
-    "right mouse should interpolate smoothly even when the legacy enable flag is false")
+    "right mouse should interpolate smoothly when aim activation is held")
 assert(math.abs(orientation.pitch - expected_pitch * aim_alpha) < 0.0001 and orientation.roll == 0,
     "a target above the crosshair must move aim up, not down")
 
@@ -1745,6 +1768,13 @@ hooks["PlayerUnitFirstPersonExtension.fixed_update"](
 )
 assert(orientation.yaw == 0 and orientation.pitch == 0,
     "a preferred weakspot leaving FOV should unlock instead of cascading down the body")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 3.0, 33
+)
+fallback_director_target, fallback_director_position = mod.get_aim_preview()
+assert(fallback_director_target == directed_target and fallback_director_position
+    and select(1, Vector3.to_elements(fallback_director_position)) == 0,
+    "a later scan should acquire the next visible damageable zone")
 held_action = nil
 prefer_director_head = false
 director_actor = nil
@@ -2511,6 +2541,42 @@ input_handler._frame = 302
 parse_network_input(62)
 assert(network_input_cache[3][62] == true and network_input_cache[2][62] == true,
     "Guard Brain should send the push attack only after block is established")
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 31.2, 312
+)
+assert(mod.get_hud_status_rows()[4].state == "PUSH",
+    "Guard Brain should expose its queued push before threat arbitration")
+guard_interrupt_unit = {}
+hooks["BtSniperShootAction._start_shooting"](
+    {}, guard_interrupt_unit, 31.21,
+    { perception_component = { target_unit = player_unit } }
+)
+input_handler._frame = 312
+parse_network_input(69)
+assert(network_input_cache[3][69] ~= true and network_input_cache[2][69] ~= true,
+    "an authoritative threat must cancel a source-less Guard Brain push")
+units[guard_units[1]].position = Vector3(2, 0, 0)
+units[guard_units[2]].position = Vector3(1.732, 1, 0)
+units[guard_units[3]].position = Vector3(-1, 1.732, 0)
+camera_rotation = Vector3(1, 0, 0)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 32, 320
+)
+input_handler._frame = 320
+parse_network_input(67)
+assert(network_input_cache[3][67] ~= true,
+    "Guard Brain should preserve a safe retreat in the reference formation")
+units[guard_units[1]].position = Vector3(1.732, 1, 0)
+units[guard_units[2]].position = Vector3(1, 1.732, 0)
+units[guard_units[3]].position = Vector3(-1.732, 1, 0)
+camera_rotation = Vector3.normalize(Vector3(1.732, 1, 0))
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 33, 330
+)
+input_handler._frame = 330
+parse_network_input(68)
+assert(network_input_cache[3][68] ~= true,
+    "Guard Brain geometry must rotate with the player instead of world axes")
 for i = 1, #guard_units do HEALTH_ALIVE[guard_units[i]] = false end
 settings.enable_resource_governor = true
 settings.enable_auto_vent = true
@@ -2555,6 +2621,18 @@ end)
 assert(outline_watchdog_ok,
     "outline watchdog should survive system teardown: " .. tostring(outline_watchdog_error))
 
+saved_health_alive, saved_alive = HEALTH_ALIVE, ALIVE
+HEALTH_ALIVE, ALIVE = nil, nil
+lifecycle_tables_ok, lifecycle_tables_error = pcall(function()
+    for frame = 1, 60 do
+        hooks["HudElementWorldMarkers.update"]({}, 0.016, 42 + frame * 0.016)
+    end
+end)
+HEALTH_ALIVE, ALIVE = saved_health_alive, saved_alive
+assert(lifecycle_tables_ok,
+    "the HUD watchdog must fail closed while lifecycle tables are unavailable: "
+        .. tostring(lifecycle_tables_error))
+
 local lifecycle_unit = {}
 units[lifecycle_unit] = {
     breed_data = {
@@ -2568,9 +2646,10 @@ units[lifecycle_unit] = {
 HEALTH_ALIVE[lifecycle_unit] = true
 preexisting_units[lifecycle_unit] = true
 local removed_outlines = 0
+local added_outline_slot
 current_outline_system = {
     has_outline = function() return false end,
-    add_outline = function() end,
+    add_outline = function(_, _, slot) added_outline_slot = slot end,
     remove_outline = function() removed_outlines = removed_outlines + 1 end,
 }
 hooks["OutlineSystem.init"](current_outline_system)
@@ -2584,10 +2663,57 @@ local lifecycle_aim_marker = { remove = false }
 lifecycle_threat_marker = { remove = false }
 mod.marker_refs[lifecycle_unit] = lifecycle_marker
 mod.aim_marker_ref = lifecycle_aim_marker
+settings.enable_outlines = false
+mod.on_setting_changed("enable_outlines")
+assert(not lifecycle_marker.remove,
+    "changing outlines must not destroy an unrelated nameplate")
+added_outline_slot = nil
+settings.enable_outlines = true
+mod.on_setting_changed("enable_outlines")
+assert(added_outline_slot == "special_target",
+    "re-enabling outlines must pass the tracked enemy category to Darktide")
 mod.on_disabled()
 assert(not mod.enabled and lifecycle_marker.remove and lifecycle_aim_marker.remove
     and removed_outlines > 0,
     "disabling the mod should remove every owned marker and outline")
+
+held_action = "action_one_hold"
+input_values.action_one_hold = true
+input_values.action_one_pressed = false
+orientation.yaw, orientation.pitch = 0, 0
+camera_rotation = Vector3.normalize(Vector3(3, 15, 1))
+disabled_recoil_calls = recoil_calls
+disabled_spread_calls = randomized_spread_calls
+mod.rapid_fire_held(true)
+hooks["BtShootNetAction._start_shooting"]({}, lifecycle_unit, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 41, 410
+)
+parse_network_input(64)
+_, disabled_threat = mod.get_hud_threats()
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "reload_state" }
+) == 1 and recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_hit_scan" }
+) == 1, "disabled BallHammer must preserve native action timing")
+assert(recoil_api.action_shoot._fire_rate_settings({ _player_unit = player_unit }).fire_time == 0.2,
+    "disabled BallHammer must preserve native fire-rate settings")
+disabled_spread = CLASS.PlayerUnitWeaponSpreadExtension.randomized_spread(
+    { _unit = player_unit }, rotation
+)
+recoil_api.add_recoil(0, nil, nil, nil, nil, nil, nil, nil, player_unit)
+assert(disabled_spread.spread == rotation and randomized_spread_calls == disabled_spread_calls + 1,
+    "disabled BallHammer must preserve native spread")
+assert(recoil_calls == disabled_recoil_calls + 1,
+    "disabled BallHammer must preserve native recoil")
+assert(network_input_cache[2][64] ~= true and orientation.yaw == 0 and orientation.pitch == 0,
+    "disabled BallHammer must not synthesize input or aim")
+assert(disabled_threat == nil,
+    "disabled BallHammer must not repopulate transient threat state")
+input_values.action_one_hold = false
+held_action = nil
 
 table.clear(marker_events)
 table.clear(aim_marker_events)
@@ -2595,8 +2721,132 @@ mod.on_enabled()
 assert(mod.enabled and live_world_markers._marker_templates.ballhammer_marker
     and live_world_markers._marker_templates.ballhammer_aim_marker,
     "re-enabling should rebind templates to the already-live HUD")
+assert(recoil_api.action_handler._calculate_time_scale(
+    { _unit = player_unit }, { kind = "shoot_hit_scan" }
+) == 1, "re-enabling must discard bind state received while disabled")
 assert(aim_marker_events[1] and marker_events[1] and marker_events[1].unit == lifecycle_unit,
     "re-enabling should recreate the preview and rediscover live enemies")
+
+hooks["BtSniperShootAction._start_shooting"](
+    {}, lifecycle_unit, 42, { perception_component = { target_unit = player_unit } }
+)
+hooks["BtMutantChargerChargeAction._start_charging"](
+    {}, lifecycle_unit, { perception_component = { target_unit = player_unit } }, {}, 41.9
+)
+_, rollback_threat = mod.get_hud_threats()
+assert(rollback_threat and rollback_threat.kind == "mutant",
+    "a post-rollback threat must not be discarded by forward-time deduplication")
+
+mod.on_disabled()
+mod.on_enabled()
+settings.enable_threat_reactions = true
+mod.on_setting_changed("enable_threat_reactions")
+hooks["BtShootNetAction._start_shooting"]({}, lifecycle_unit, {
+    perception_component = { target_unit = player_unit },
+})
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 0.15, 2
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 0.26, 3
+)
+replacement_threat_unit = {}
+hooks["BtSniperShootAction._start_shooting"](
+    {}, replacement_threat_unit, 0.27,
+    { perception_component = { target_unit = player_unit } }
+)
+input_values.action_one_hold = false
+input_handler._frame = 3
+parse_network_input(65)
+assert(network_input_cache[6][65] ~= true,
+    "a new authoritative threat must cancel an expired source's queued dodge")
+
+mod.on_disabled()
+mod.on_enabled()
+repeating_hound = {}
+units[repeating_hound] = {
+    breed_data = {
+        name = "chaos_hound",
+        base_height = 1.2,
+        smart_tag_target_type = "breed",
+        tags = { minion = true, special = true },
+    },
+    position = Vector3(0, 8, 0),
+}
+HEALTH_ALIVE[repeating_hound] = true
+BLACKBOARDS[repeating_hound] = {
+    pounce = { started_leap = true, target_unit = player_unit },
+    perception = { target_unit = player_unit },
+}
+hooks["HealthExtension.init"](nil, nil, repeating_hound)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1, 10
+)
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.5, 15
+)
+_, repeated_hound_threat = mod.get_hud_threats()
+assert(repeated_hound_threat == nil,
+    "one sustained hound leap must arm only one threat window")
+player_alive = false
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 1.51, 16
+)
+player_alive = true
+input_handler._frame = 16
+parse_network_input(66)
+assert(network_input_cache[6][66] ~= true,
+    "a dead-player transition must clear queued runtime actions")
+
+HEALTH_ALIVE[repeating_hound] = false
+BLACKBOARDS[repeating_hound] = nil
+settings.aim_activation = "off"
+settings.trigger_activation = "off"
+settings.enable_guard_brain = false
+settings.enable_resource_governor = false
+settings.enable_auto_vent = false
+mod.on_setting_changed("aim_activation")
+mod.on_setting_changed("trigger_activation")
+mod.on_setting_changed("enable_guard_brain")
+mod.on_setting_changed("enable_resource_governor")
+mod.on_setting_changed("enable_auto_vent")
+weapon_template_lookups = 0
+replicated_field_checks = 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2, 20
+)
+assert(weapon_template_lookups == 0 and replicated_field_checks == 0,
+    "an idle fixed tick must skip disabled weapon and replicated-target work")
+settings.enable_resource_governor = true
+mod.on_setting_changed("enable_resource_governor")
+weapon_template_lookups = 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.1, 21
+)
+assert(weapon_template_lookups == 1,
+    "the resource governor must reuse one weapon context per fixed tick")
+
+settings.enable_resource_governor = false
+settings.enable_aim_director = true
+settings.aim_activation = "right_mouse"
+mod.on_setting_changed("enable_resource_governor")
+mod.on_setting_changed("enable_aim_director")
+mod.on_setting_changed("aim_activation")
+director_positions[directed_target] = {
+    head = Vector3(2, 20, 1.8),
+    torso = Vector3(0, 20, 1),
+}
+director_actor = { unit = directed_target, hit_zone = "torso" }
+weapon_action_component.template.actions = { action_shoot_hip = {} }
+HEALTH_ALIVE[directed_target] = true
+held_action = "action_two_hold"
+weapon_template_lookups = 0
+hooks["PlayerUnitFirstPersonExtension.fixed_update"](
+    first_person_extension, player_unit, 0.1, 2.2, 22
+)
+assert(weapon_template_lookups == 1,
+    "Armor Director must resolve the local weapon profile once per target scan")
+held_action = nil
 
 local unload_marker = { remove = false }
 local unload_aim_marker = { remove = false }

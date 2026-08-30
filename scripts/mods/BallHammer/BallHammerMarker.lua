@@ -155,7 +155,7 @@ end
 
 template.on_enter = function(widget, marker)
     local data = mod.get_unit_data(marker.unit) or marker.data
-    if data then
+    if type(data) == "table" and type(data.color) == "table" then
         widget.content.name = name_for(data)
         widget.content.flag = flag_for(data)
         for _, style_id in ipairs(BOX_STYLE_IDS) do
@@ -175,11 +175,20 @@ template.on_exit = function(_, marker)
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker)
-    if not HEALTH_ALIVE[marker.unit] then
+    if not (HEALTH_ALIVE and HEALTH_ALIVE[marker.unit]) then
         marker.remove = true
+        widget.visible = false
         return
     end
     if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_nameplates() then
+        widget.visible = false
+        return
+    end
+
+    local data = mod.get_unit_data(marker.unit) or marker.data
+    if type(data) ~= "table" or type(data.name) ~= "string"
+        or type(data.color) ~= "table" then
+        marker.remove = true
         widget.visible = false
         return
     end
@@ -196,17 +205,14 @@ template.update_function = function(parent, ui_renderer, widget, marker)
         widget.visible = false
         return
     end
-    local data = mod.get_unit_data(marker.unit) or marker.data
-    if data then
-        apply_distance_alpha(widget, data, distance,
-            marker.raycast_initialized and marker.raycast_result == false)
-        widget.content.flag = flag_for(data)
-    end
+    apply_distance_alpha(widget, data, distance,
+        marker.raycast_initialized and marker.raycast_result == false)
+    widget.content.flag = flag_for(data)
 
     local floor_distance = math.floor(distance)
     if floor_distance ~= marker.last_dist then
         marker.last_dist = floor_distance
-        if data then widget.content.name = name_for(data, floor_distance) end
+        widget.content.name = name_for(data, floor_distance)
     end
     widget.visible = true
 end

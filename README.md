@@ -23,7 +23,7 @@ BallHammer is a [Darktide Mod Framework](https://github.com/Darktide-Mod-Framewo
 - Held Rapid Fire has a configurable 1.1x to 10x multiplier; opt-in Quick Reload is capped at 5x
 - Optional local weapon recoil and spread suppression without camera compensation
 - Collision-spaced pickup cards with compact stacking, fixed screen sizing, category accents, distance fading, category presets, custom per-pickup filters, and distinct Med, Concentration, Combat, and Celerity Stimm labels
-- Weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects
+- Optional weighted Arbites and Skitarii companion orders based on special type, distance, and remaining health without moving the camera; native companion-rescue states override normal weights, retargeting waits for companion damage, and an optional charged Arbites dog EMP sends its press, hold, and release through Darktide's networked input frames when the dog connects
 - Armor and Weakspot Director ranks visible hit zones using the current weapon damage profile, live armor overrides, shields, and weakspot finesse; triggerbot skips invulnerable shots and rage mode can choose another target
 - Threat Interceptor marks committed hound, trapper, mutant, rager, sniper, flamer, grenade, and verified overhead attacks while a HUD shows the planned reaction and reaction-window countdown
 - Native tactical HUD combines a live system/keybind panel, a camera-relative horizontal threat compass, and compact squad health, toughness, ammo, grenade, class, distance, disable, and objective states in one pooled HUD element
@@ -42,9 +42,9 @@ Controller support is opt-in and only responds while Darktide reports the gamepa
 
 Pickup ESP defaults to all pickups and can show only supplies, stimms, crafting materials, mission items, or a custom per-item selection.
 
-Threat markers and armor-aware hit-zone selection are enabled by default. Automatic threat reactions, Guard Brain, resource governing, automatic quell or safe vent, emergency physical-input override, and diagnostic logging are all opt-in. Diagnostic logging records decisions but does not gate automatic reactions. Unknown or changed game states remain marker-only rather than guessing an input.
+Threat markers and armor-aware hit-zone selection are enabled by default. Automatic companion orders, threat reactions, Guard Brain, resource governing, automatic quell or safe vent, emergency physical-input override, and diagnostic logging are all opt-in. Diagnostic logging records decisions but does not gate automatic reactions. Unknown or changed game states remain marker-only rather than guessing an input.
 
-The Tactical HUD section independently controls the system panel, horizontal threat compass, compass range, squad list, and shared opacity. Darktide's native HUD scale also applies to the complete element.
+The Tactical HUD section independently controls the system panel, horizontal threat compass, compass range, squad list, shared opacity, and HUD transition animation. Darktide's native HUD scale also applies to the complete element.
 
 ## Requirements
 
@@ -65,7 +65,9 @@ Keep your existing optional mod entries and add `BallHammer` once. The framework
 From the repository root:
 
 ```sh
-for test in tests/*_smoke.lua; do lua "$test" || exit 1; done
+for interpreter in lua luajit; do
+  for test in tests/*_smoke.lua; do "$interpreter" "$test" || exit 1; done
+done
 bash tests/runtime_compile_smoke.sh
 find scripts -name '*.lua' -print0 | xargs -0 -n1 luac -p
 ```

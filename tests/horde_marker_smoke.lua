@@ -17,13 +17,16 @@ Vector3 = setmetatable({
 })
 RESOLUTION_LOOKUP = { width = 1000, height = 600 }
 
+local horde_distance = 100
+local ui_motion = true
 local mod = {
     enabled = true,
     horde_marker_refs = {},
     horde_active_markers = {},
     horde_unit_data = {},
     get_enable_horde_esp = function() return true end,
-    get_horde_distance = function() return 100 end,
+    get_horde_distance = function() return horde_distance end,
+    get_ui_motion_enabled = function() return ui_motion end,
     get_aim_location = function() return "head" end,
     io_dofile = function(_, path)
         local file = path:match("([^/]+)$")
@@ -109,6 +112,15 @@ assert(mod.horde_marker_refs[replacement.unit] == replacement
     "an old horde marker exit must not clear a newer replacement")
 markers[1] = replacement
 
+markers[4].widget.content.distance = 200
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 0.65)
+assert(markers[1].widget.content.label == "Horde x3",
+    "horde counts must exclude members outside the configured distance")
+markers[4].widget.content.distance = 20
+position_reads = 0
+template.on_exit(nil, markers[1])
+template.on_enter(markers[1].widget, markers[1])
+
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 0.7)
 assert(position_reads <= 24,
     "horde projection should inspect only the body-extents bones needed by the grouped ESP")
@@ -151,4 +163,23 @@ for _, position in pairs(units[markers[4].unit].nodes) do position.screen_x = -1
 template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 2.1)
 assert(markers[1].widget.content.label == "Horde x3",
     "horde count should still decrease after a member leaves the edge buffer")
+ui_motion = false
+units[markers[4].unit].body.x = 20
+for _, position in pairs(units[markers[4].unit].nodes) do position.screen_x = 400 end
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[4].widget, markers[4], nil, nil, 2.15)
+assert(markers[4].widget.content.draw_box and not markers[4].widget.content.draw_dot,
+    "disabling HUD motion should snap a split horde member to its box state")
+ui_motion = true
+
+horde_distance = nil
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 2.2)
+assert(not markers[1].widget.visible,
+    "horde markers should hide safely when their distance setting is unavailable")
+
+horde_distance = 100
+HEALTH_ALIVE = nil
+markers[1].remove = false
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, markers[1].widget, markers[1], nil, nil, 2.3)
+assert(markers[1].remove,
+    "horde markers should fail closed when the lifecycle table is unavailable")
 print("BallHammer horde marker smoke: ok")

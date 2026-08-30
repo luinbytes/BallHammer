@@ -4,7 +4,7 @@ Research snapshot: 2026-07-26. Visual claims below come from first-party gamepla
 
 ## Existing BallHammer constraint
 
-The threat compass is already a 520 px, 42 px-high top-centre rail with a fixed `^` forward heading and four camera-relative entries. It ranks the committed threat first, then nearby specials by distance; each entry carries a red pip, full name, distance, and optional vertical `^`/`v` suffix. It also actively spaces labels horizontally. See [`BallHammerThreatHud.lua`](../../scripts/mods/BallHammer/BallHammerThreatHud.lua) lines 10-15, 66-71, 137-152, 228-253, 430-480, and 497-560.
+The threat compass is a 520 px, 42 px-high top-centre rail with a fixed `^` forward heading and up to four camera-relative entries. It ranks the committed threat first, then nearby specials by distance. Every entry stays on its true bearing as a compact pip; only the focused entry carries a full name and distance callout, while the summary reports the full scanned threat count. An optional vertical `^`/`v` glyph communicates elevation. See [`BallHammerThreatHud.lua`](../../scripts/mods/BallHammer/BallHammerThreatHud.lua).
 
 ## Pattern comparison
 
@@ -20,7 +20,7 @@ The threat compass is already a 520 px, 42 px-high top-centre rail with a fixed 
 - **Threat marker treatment:** Skyrim proves distinct marker shapes and colour, including a red enemy dot. It does not prove Darktide's urgency treatment, so stronger committed-threat emphasis is a design recommendation.
 - **Heading:** Skyrim visibly centres the active direction and shows `N`; Call of Duty supplies a location line beneath its compass. Use the fixed centre cue, not a moving heading label.
 - **Background and borders:** Skyrim is deliberately ornament-framed. BallHammer's borderless ribbon is an intentional genre fit, not a Bethesda imitation.
-- **Label overlap:** no selected primary source demonstrates a usable collision rule. Keep BallHammer's existing horizontal spacing as a product constraint, but collapse text before moving a marker away from its bearing.
+- **Label overlap:** no selected primary source demonstrates a usable collision rule. Keep focused text anchored to its true bearing and suppress passive labels before moving a marker away from its bearing.
 - **Behind-player behaviour:** no selected primary source establishes a reusable rear-marker convention. BallHammer must define and test it explicitly, because the `atan2` mapping has a left/right seam at directly behind.
 
 ## Concrete recommendation for the Darktide threat compass
