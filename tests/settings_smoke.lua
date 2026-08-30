@@ -176,8 +176,9 @@ assert(widgets[10].sub_widgets[5].setting_id == "enable_no_recoil"
 assert(widgets[10].sub_widgets[6].setting_id == "enable_no_spread"
     and widgets[10].sub_widgets[6].default_value == false,
     "spread suppression should have an independent weapon toggle")
-assert(widgets[11].sub_widgets[1].setting_id == "enable_companion_target",
-    "companion auto-target should have an independent toggle")
+assert(widgets[11].sub_widgets[1].setting_id == "enable_companion_target"
+    and widgets[11].sub_widgets[1].default_value == false,
+    "companion auto-target should have an independent opt-in toggle")
 assert(widgets[11].sub_widgets[2].setting_id == "companion_distance",
     "companion auto-target should expose a range limit")
 assert(widgets[11].sub_widgets[3].setting_id == "enable_auto_whistle"
@@ -198,6 +199,9 @@ assert(widgets[12].sub_widgets[4].setting_id == "show_player_list"
     "squad list should be visible by default")
 assert(widgets[12].sub_widgets[5].setting_id == "hud_opacity",
     "tactical HUD should expose one shared opacity control")
+assert(widgets[12].sub_widgets[6].setting_id == "enable_ui_motion"
+    and widgets[12].sub_widgets[6].default_value == true,
+    "tactical HUD should expose an opt-out for animated transitions")
 
 local function check_localization(widget)
     assert(localization[widget.setting_id], "missing setting localization: " .. widget.setting_id)

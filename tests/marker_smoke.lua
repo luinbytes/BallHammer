@@ -31,15 +31,15 @@ assert(template.unit_node == "j_head", "priority visibility should raycast to th
 local definition = template.create_widget_defintion(template, "pivot")
 local styles = {}
 for _, pass in ipairs(definition) do styles[pass.style_id] = pass.style end
-assert(styles.top and styles.bottom and styles.left and styles.right, "Perkaholic style needs a four-line box")
+assert(styles.top and styles.bottom and styles.left and styles.right, "BallHammer style needs a four-line box")
 assert(styles.health_bg and styles.health_fill, "priority ESP should include a health bar")
-assert(styles.name.font_type == "mono_tide_regular", "Perkaholic style needs a compact monospace label")
+assert(styles.name.font_type == "mono_tide_regular", "BallHammer style needs a compact monospace label")
 assert(styles.name.font_size == 13 and styles.flag.font_size == 11,
     "names and flags should remain readable over the game")
 assert(styles.name_shadow and styles.flag_shadow,
-    "ESP text should use the Perkaholic one-pixel shadow")
+    "ESP text should use the BallHammer one-pixel shadow")
 assert(styles.top.color[2] == 255 and styles.top.color[3] == 158 and styles.top.color[4] == 181,
-    "Perkaholic accent should be #ff9eb5")
+    "BallHammer accent should be #ff9eb5")
 
 local unit = {}
 local marker = {
@@ -153,4 +153,17 @@ assert(widget.style.top.color[1] == 64 and widget.style.name.text_color[1] == 64
 assert(widget.style.top.color[2] == 255 and widget.style.top.color[3] == 80 and
     widget.style.top.color[4] == 80,
     "occluded priority ESP should restore its category color")
+
+live_data = nil
+local invalid_marker = { unit = unit, data = nil, draw = true, base_height = 1.8 }
+template.on_enter(widget, invalid_marker)
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, invalid_marker)
+assert(invalid_marker.remove and not widget.visible,
+    "priority markers should remove themselves instead of rendering stale data")
+
+HEALTH_ALIVE = nil
+invalid_marker.remove = false
+template.update_function(parent, { scale = 1, inverse_scale = 1 }, widget, invalid_marker)
+assert(invalid_marker.remove,
+    "priority markers should fail closed when the lifecycle table is unavailable")
 print("BallHammer marker smoke: ok")

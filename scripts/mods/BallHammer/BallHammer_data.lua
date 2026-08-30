@@ -480,7 +480,7 @@ local data = {
                     {
                         setting_id = "enable_companion_target",
                         type = "checkbox",
-                        default_value = true,
+                        default_value = false,
                     },
                     {
                         setting_id = "companion_distance",
@@ -528,6 +528,11 @@ local data = {
                         default_value = 80,
                         range = { 20, 100 },
                         decimals_number = 0,
+                    },
+                    {
+                        setting_id = "enable_ui_motion",
+                        type = "checkbox",
+                        default_value = true,
                     },
                 },
             },

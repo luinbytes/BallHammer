@@ -127,4 +127,5 @@ return {
     threat_compass_range = { en = "Threat Compass Range (m)" },
     show_player_list = { en = "Squad Player List" },
     hud_opacity = { en = "Tactical HUD Opacity (%%)" },
+    enable_ui_motion = { en = "Animate HUD Transitions" },
 }

@@ -1,6 +1,7 @@
 local threat_text = "DODGE 0.2"
 local show_status, show_compass, show_players = true, true, true
 local hud_opacity = 80
+local ui_motion = true
 local threat_unit = {}
 local player_unit = {}
 local positions = {
@@ -32,6 +33,7 @@ local mod = {
     get_hud_settings = function()
         return show_status, show_compass, 80, show_players, hud_opacity
     end,
+    get_ui_motion_enabled = function() return ui_motion end,
 }
 
 get_mod = function() return mod end
@@ -199,7 +201,7 @@ assert(element._widgets_by_name.status_1.style.label.text_color[1] == 204
     and element._widgets_by_name.player_1.style.stats.text_color[1] == 196,
     "shared HUD opacity should apply to text, accents, and compass surfaces")
 
-local crowded_units = { {}, {}, {} }
+local crowded_units = { {}, {}, {}, {} }
 for i = 1, #crowded_units do
     local unit = crowded_units[i]
     positions[unit] = vector(10, 10, 3)
@@ -216,20 +218,22 @@ assert(element._widgets_by_name.compass_threat_1.content.visible
     and element._widgets_by_name.compass_threat_2.content.visible
     and element._widgets_by_name.compass_threat_4.content.visible
     and element._widgets_by_name.compass_threat_2.content.text == ""
-    and element._widgets_by_name.compass.content.summary == "4 THREATS"
     and element._widgets_by_name.compass_threat_1.style.text.offset[1] == 0
     and element._widgets_by_name.compass_threat_1.offset[1]
         == element._widgets_by_name.compass_threat_2.offset[1],
     "threat compass should label only the focused threat while retaining every true-bearing pip")
+assert(element._widgets_by_name.compass.content.summary == "5 THREATS",
+    "threat compass summary should count every scanned threat, not only visible pip slots")
 for i = 1, #crowded_units do
     threat_data[crowded_units[i]] = nil
     HEALTH_ALIVE[crowded_units[i]] = false
 end
 
+local right_bearing = element._widgets_by_name.compass_threat_1.offset[1]
 positions[threat_unit] = vector(-10, 10, 3)
 element:update(0.016, 1.32, nil, {}, nil)
-assert(element._widgets_by_name.compass_threat_1.offset[1] < 0,
-    "bearing should follow camera-relative movement every frame between scans")
+assert(element._widgets_by_name.compass_threat_1.offset[1] < right_bearing,
+    "bearing interpolation should follow camera-relative movement every frame between scans")
 
 HEALTH_ALIVE[threat_unit] = false
 active_threat.danger_position = { unbox = function() return vector(-10, 10, 3) end }
@@ -263,6 +267,55 @@ active_threat = { source = unmapped_threat, kind = "rager" }
 element:update(0.016, 1.7, nil, {}, nil)
 assert(element._widgets_by_name.compass_threat_1.content.text:find("RAGER", 1, true),
     "committed threats should not depend on ESP metadata")
+
+local dead_player_unit = {}
+ALIVE[dead_player_unit] = false
+local dead_player = {
+    player_unit = dead_player_unit,
+    name = function() return "Disconnected" end,
+    profile = function() return { archetype = { name = "veteran" } } end,
+    unit_is_alive = function() return false end,
+}
+local old_has_extension = ScriptUnit.has_extension
+ScriptUnit.has_extension = function(unit, name)
+    assert(unit ~= dead_player_unit, "dead player units must not be queried for extensions")
+    return old_has_extension(unit, name)
+end
+Managers.player.players = function() return { one = player, two = dead_player } end
+element:update(0.016, 1.86, nil, {}, nil)
+assert(element._widgets_by_name.player_2.content.state:find("DEAD", 1, true),
+    "the squad list should render a dead player without touching stale unit extensions")
+ScriptUnit.has_extension = old_has_extension
+
+threat_data[threat_unit] = {
+    name = "Mutant",
+    flag = "SPECIAL",
+    companion_danger = 1,
+}
+ALIVE[threat_unit], HEALTH_ALIVE[threat_unit] = true, true
+active_threat = { source = threat_unit, kind = "mutant" }
+positions[threat_unit] = vector(0.1, -10, 3)
+element:update(0.016, 2.0, nil, {}, nil)
+local rear_before = element._widgets_by_name.compass_threat_1.offset[1]
+positions[threat_unit] = vector(-0.1, -10, 3)
+element:update(0.016, 2.02, nil, {}, nil)
+local rear_after = element._widgets_by_name.compass_threat_1.offset[1]
+assert(rear_before * rear_after > 0,
+    "rear compass bearing should use hysteresis instead of crossing the atan2 seam")
+ui_motion = false
+positions[threat_unit] = vector(10, 10, 3)
+element:update(0.016, 2.03, nil, {}, nil)
+assert(math.abs(element._widgets_by_name.compass_threat_1.offset[1] - 49) < 0.001,
+    "disabling HUD motion should snap compass pips to their true bearing: "
+        .. tostring(element._widgets_by_name.compass_threat_1.offset[1]))
+ui_motion = true
+
+parent.player_camera = function() return nil end
+element:update(0.016, 2.04, nil, {}, nil)
+assert(element._widgets_by_name.compass.content.summary == ""
+    and not element._widgets_by_name.compass_threat_1.content.visible,
+    "camera loss should clear the summary and all stale compass pips")
+parent.player_camera = function() return camera end
 
 game_mode_name = "hub"
 element:update(0.016, 1.71, nil, {}, nil)

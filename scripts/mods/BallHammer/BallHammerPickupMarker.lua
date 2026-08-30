@@ -15,6 +15,17 @@ local CARD_WIDTH = 156
 local CARD_HEIGHT = 24
 local DETACH_GAP = 6
 local transition_states = {}
+local layout_visible = {}
+
+local function motion_enabled()
+    local getter = mod.get_ui_motion_enabled
+    return type(getter) ~= "function" or getter() ~= false
+end
+
+local function valid_data(data)
+    return type(data) == "table" and type(data.name) == "string"
+        and type(data.color) == "table"
+end
 
 local function rect_style(color, offset, size)
     return {
@@ -40,8 +51,8 @@ local function text_style(font_size, alignment, color, offset, size)
     }
 end
 
-local function apply_card_size(marker)
-    local style = marker.widget.style
+local function apply_card_size(widget)
+    local style = widget.style
     style.shadow.size[1], style.shadow.size[2] = CARD_WIDTH + 4, 28
     style.shadow.offset[2] = -1
     style.background.size[1], style.background.size[2] = CARD_WIDTH, CARD_HEIGHT
@@ -122,17 +133,19 @@ end
 local function layout_markers(parent, ui_renderer, t)
     if t ~= nil and last_layout_t == t then return end
     last_layout_t = t
+    for unit in pairs(layout_visible) do layout_visible[unit] = nil end
     local markers = {}
     local max_distance = mod.get_pickup_distance()
+    if type(max_distance) ~= "number" then return end
     for unit, marker in pairs(mod.pickup_marker_refs) do
-        if ALIVE[unit] then
+        if ALIVE and ALIVE[unit] then
             local widget = marker.widget
             local distance = widget and widget.content.distance
             local data = marker.data or mod.get_pickup_data(unit)
             local in_buffer, x, y = marker_projection(parent, ui_renderer, marker)
             if in_buffer and distance and distance <= max_distance
-                and data and mod.get_pickup_visible(data) then
-                widget.content.name = data.name
+                and valid_data(data) and mod.get_pickup_visible(data) then
+                layout_visible[unit] = true
                 markers[#markers + 1] = {
                     marker = marker,
                     x = x,
@@ -186,7 +199,6 @@ local function layout_markers(parent, ui_renderer, t)
             local first_y = anchor_y + (#cluster - 1) * row_step * 0.5
             for j = 1, #cluster do
                 local item = cluster[j]
-                apply_card_size(item.marker)
                 local target_x = #cluster > 1 and anchor_x or item.x
                 local target_y = #cluster > 1
                     and first_y - (j - 1) * row_step or item.y
@@ -197,7 +209,7 @@ local function layout_markers(parent, ui_renderer, t)
                 end
                 local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
                 state.last_t = t or state.last_t
-                local alpha = 1 - math.exp(-STACK_SPEED * dt)
+                local alpha = motion_enabled() and 1 - math.exp(-STACK_SPEED * dt) or 1
                 state.x = state.x + (target_x - item.x - state.x) * alpha
                 state.y = state.y + (target_y - item.y - state.y) * alpha
                 item.marker.widget.offset[1] = item.x + state.x
@@ -208,8 +220,11 @@ local function layout_markers(parent, ui_renderer, t)
 end
 
 template.on_enter = function(widget, marker)
+    marker.widget = widget
+    widget.offset = widget.offset or { 0, 0, 0 }
+    apply_card_size(widget)
     local data = marker.data or mod.get_pickup_data(marker.unit)
-    if data then
+    if valid_data(data) then
         widget.content.name = data.name
         widget.style.name.text_color = table.clone(data.color)
         widget.style.accent.color = table.clone(data.color)
@@ -227,22 +242,24 @@ template.on_exit = function(_, marker)
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker, _, _, t)
-    if not ALIVE[marker.unit] then
+    if not (ALIVE and ALIVE[marker.unit]) then
         marker.remove = true
+        widget.visible = false
         return
     end
     local distance = widget.content.distance
-    local in_buffer = marker_projection(parent, ui_renderer, marker, widget)
+    local max_distance = mod.get_pickup_distance()
     if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_pickup_esp()
-        or not in_buffer or not distance
-        or distance > mod.get_pickup_distance() then
+        or type(max_distance) ~= "number" or type(distance) ~= "number"
+        or distance > max_distance then
         widget.visible = false
         return
     end
 
     local data = marker.data or mod.get_pickup_data(marker.unit)
-    if not data then
+    if not valid_data(data) then
         marker.remove = true
+        widget.visible = false
         return
     end
     if not mod.get_pickup_visible(data) then
@@ -250,7 +267,10 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         return
     end
     layout_markers(parent, ui_renderer, t)
-    local max_distance = mod.get_pickup_distance()
+    if not layout_visible[marker.unit] then
+        widget.visible = false
+        return
+    end
     local fade_start = max_distance * 0.6
     local fade = distance <= fade_start and 1
         or math.max(0, (max_distance - distance) / (max_distance - fade_start))

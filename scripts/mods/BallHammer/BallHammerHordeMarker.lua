@@ -28,6 +28,11 @@ local function box_visible(content)
     return content.draw_box
 end
 
+local function motion_enabled()
+    local getter = mod.get_ui_motion_enabled
+    return type(getter) ~= "function" or getter() ~= false
+end
+
 local function line_style(color)
     return {
         horizontal_alignment = "center",
@@ -82,7 +87,7 @@ local function project_box(parent, ui_renderer, marker)
     local data = marker.data or mod.horde_unit_data[marker.unit]
     local widget = marker.widget
     local distance = widget.content.distance
-    if not data then return nil end
+    if type(data) ~= "table" then return nil end
     local body = Unit.world_position(marker.unit, 1)
     if not body then return nil end
     local world_x, world_y, world_z = Vector3.to_elements(body)
@@ -96,21 +101,32 @@ local function project_box(parent, ui_renderer, marker)
         force_horde_merge = data.force_horde_merge == true,
         world = { x = world_x, y = world_y, z = world_z },
     }
-    if not distance or distance > mod.get_horde_distance() then return box end
+    local max_distance = mod.get_horde_distance()
+    if type(distance) ~= "number" or type(max_distance) ~= "number"
+        or distance > max_distance then
+        box.in_buffer = false
+        return box
+    end
 
-    local camera = parent:_get_camera()
-    if not camera then return box end
+    local camera = parent and parent._get_camera and parent:_get_camera()
+    if not camera then
+        box.in_buffer = false
+        return box
+    end
     local inverse_scale = ui_renderer.inverse_scale
     local aim_node = mod.get_aim_location() == "torso" and "j_spine" or "j_head"
     local bounds = Bounds.project(
         parent, ui_renderer, camera, marker.unit, body, data.base_height, aim_node,
         HORDE_BONE_NODES
     )
-    if not bounds then return box end
+    if not bounds then
+        box.in_buffer = false
+        return box
+    end
     local screen_width = RESOLUTION_LOOKUP.width * inverse_scale
     local screen_height = RESOLUTION_LOOKUP.height * inverse_scale
 
-    box.in_buffer = Bounds.in_screen_buffer(bounds, screen_width, screen_height, Bounds.OFFSCREEN_BUFFER)
+    box.in_buffer = Bounds.in_screen_buffer(bounds, screen_width, screen_height, Bounds.OFFSCREEN_BUFFER) == true
     box.projected = box.in_buffer
     box.anchor_x = widget.offset[1]
     box.anchor_y = widget.offset[2]
@@ -126,7 +142,7 @@ local function rebuild_cache(parent, ui_renderer, t)
 
     local boxes = {}
     for unit, marker in pairs(mod.horde_marker_refs) do
-        if HEALTH_ALIVE[unit] then
+        if HEALTH_ALIVE and HEALTH_ALIVE[unit] then
             local box = project_box(parent, ui_renderer, marker)
             if box then
                 if box.clusterable then
@@ -246,11 +262,16 @@ local function animate_membership(unit, box, t)
 
     local dt = math.max(0, (t or state.last_t or 0) - (state.last_t or t or 0))
     state.last_t = t or state.last_t
-    local step = dt / TRANSITION_DURATION
-    if state.progress < target then
-        state.progress = math.min(target, state.progress + step)
-    elseif state.progress > target then
-        state.progress = math.max(target, state.progress - step)
+    if not motion_enabled() then
+        state.progress = target
+        if not box.grouped then state.leader = false end
+    else
+        local step = dt / TRANSITION_DURATION
+        if state.progress < target then
+            state.progress = math.min(target, state.progress + step)
+        elseif state.progress > target then
+            state.progress = math.max(target, state.progress - step)
+        end
     end
 
     if box.grouped and box.leader then
@@ -262,7 +283,7 @@ local function animate_membership(unit, box, t)
             state.left_offset, state.right_offset = target_left, target_right
             state.top_offset, state.bottom_offset = target_top, target_bottom
         else
-            local alpha = 1 - math.exp(-TRANSITION_SPEED * dt)
+            local alpha = motion_enabled() and 1 - math.exp(-TRANSITION_SPEED * dt) or 1
             state.left_offset = state.left_offset + (target_left - state.left_offset) * alpha
             state.right_offset = state.right_offset + (target_right - state.right_offset) * alpha
             state.top_offset = state.top_offset + (target_top - state.top_offset) * alpha
@@ -327,7 +348,7 @@ end
 template.on_enter = function(widget, marker)
     mod.horde_marker_refs[marker.unit] = marker
     local data = marker.data or mod.horde_unit_data[marker.unit]
-    if data and data.color then
+    if type(data) == "table" and type(data.color) == "table" then
         for _, style_id in ipairs(BOX_STYLE_IDS) do
             widget.style[style_id].color = table.clone(data.color)
         end
@@ -345,11 +366,19 @@ template.on_exit = function(_, marker)
 end
 
 template.update_function = function(parent, ui_renderer, widget, marker, _, _, t)
-    if not HEALTH_ALIVE[marker.unit] then
+    if not (HEALTH_ALIVE and HEALTH_ALIVE[marker.unit]) then
         marker.remove = true
+        widget.visible = false
         return
     end
     if not mod.enabled or mod.esp_enabled == false or not mod.get_enable_horde_esp() then
+        widget.visible = false
+        return
+    end
+
+    local data = marker.data or mod.horde_unit_data[marker.unit]
+    if type(data) ~= "table" or type(data.color) ~= "table" then
+        marker.remove = true
         widget.visible = false
         return
     end
@@ -360,10 +389,7 @@ template.update_function = function(parent, ui_renderer, widget, marker, _, _, t
         widget.visible = false
         return
     end
-    local data = marker.data or mod.horde_unit_data[marker.unit]
-    if data then
-        apply_distance_alpha(widget, data, widget.content.distance)
-    end
+    apply_distance_alpha(widget, data, widget.content.distance)
 
     local motion = animate_membership(marker.unit, box, t)
     apply_motion_alpha(widget, motion)

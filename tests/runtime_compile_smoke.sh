@@ -3,5 +3,7 @@ set -euo pipefail
 
 bytecode=$(mktemp)
 trap 'rm -f "$bytecode"' EXIT
-luajit -b scripts/mods/BallHammer/BallHammer.lua "$bytecode"
-echo "BallHammer LuaJIT compile smoke: ok"
+while IFS= read -r source; do
+    luajit -b "$source" "$bytecode"
+done < <(find scripts -type f -name '*.lua' -print | sort)
+echo "BallHammer production LuaJIT compile smoke: ok"
